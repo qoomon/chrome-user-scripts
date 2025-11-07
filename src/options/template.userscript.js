@@ -1,0 +1,12 @@
+// ==UserScript==
+// @name         New User Script
+// @version      0.1
+// @description  A simple user script template
+// @author       You
+// @match        https://google.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=example.com
+// ==/UserScript==
+
+(async function () {
+    alert('Hello world!');
+})();
