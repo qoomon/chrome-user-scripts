@@ -1,14 +1,13 @@
-# Vue 3 + Vite + CRXJS
+# User Script Manager for Chrome
 
-This template helps you quickly start developing Chrome extensions with Vue 3, TypeScript and Vite. It includes the CRXJS Vite plugin for seamless Chrome extension development.
 
-## Features
 
-- Vue 3 with `<script setup>` syntax
-- TypeScript support
-- Vite build tool
-- CRXJS Vite plugin integration
-- Chrome extension manifest configuration
+
+[!["Available in the Chrome Web Store"](https://developer.chrome.com/static/docs/webstore/branding/image/tbyBjqi7Zu733AAKA5n4.png)](https://chromewebstore.google.com/detail/ihgmdcaijidjdmngpnbdkdefhocmkdhc)
+
+
+
+# Development
 
 ## Quick Start
 
@@ -35,7 +34,7 @@ npm run build
 ## Project Structure
 
 - `src/popup/` - Extension popup UI
-- `src/content/` - Content scripts
+- `src/options/` - Extension option UI
 - `manifest.config.ts` - Chrome extension manifest configuration
 
 ## Documentation
