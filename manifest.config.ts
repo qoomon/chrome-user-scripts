@@ -29,7 +29,8 @@ export default defineManifest({
     permissions: [
         'storage',
         'userScripts',
-        'activeTab'
+        'activeTab',
+        'webRequest',
     ],
     host_permissions: [
         "<all_urls>"

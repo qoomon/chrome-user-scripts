@@ -51,7 +51,6 @@ const props = defineProps({
 
 #card {
   font-size: 13px;
-  height: 160px;
   width: 400px;
 }
 
@@ -64,7 +63,7 @@ const props = defineProps({
 #main {
   display: flex;
   gap: 24px;
-  padding: 16px 20px;
+  padding: 16px 20px 0 20px;
 }
 
 #icon {
@@ -86,6 +85,10 @@ const props = defineProps({
 
   overflow: hidden;
   text-overflow: ellipsis;
+  height: 48px;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 

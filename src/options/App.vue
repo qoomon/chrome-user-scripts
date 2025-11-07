@@ -21,14 +21,26 @@ const userScripts = ref<BrowserUserScript[]>();
 const editorUserScript = ref<BrowserUserScript>();
 
 onBeforeMount(async () => {
+  const scriptUrl = new URL(location.href).searchParams.get('url');
+  if(scriptUrl) {
+    const userScript = await fetch(scriptUrl).then(async (res) => UserScripts.parse(await res.text()));
+    editorUserScript.value = Object.assign(userScript, {
+      id: new TextEncoder().encode(crypto.randomUUID()).toBase64({urlSafe: true, omitPadding: true}),
+      enabled: true,
+    });
 
-  const scriptId = new URL(location.href).searchParams.get('id');
-  if (scriptId) {
+    const url = new URL(location.href);
+    url.searchParams.delete('url');
+    window.history.pushState(null, '', url.toString());
+  } else {
+    const scriptId = new URL(location.href).searchParams.get('id');
+    if (scriptId) {
       editorUserScript.value = await UserScripts.getUserScript(scriptId);
       console.log("userScript:", editorUserScript.value);
-  } else {
-    userScripts.value = await UserScripts.getUserScripts();
-    console.log("userScripts:", userScripts.value);
+    } else {
+      userScripts.value = await UserScripts.getUserScripts();
+      console.log("userScripts:", userScripts.value);
+    }
   }
 });
 

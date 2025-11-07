@@ -38,6 +38,22 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     }
 });
 
+chrome.webRequest.onBeforeRequest.addListener(({method, tabId, url}) => {
+    if (method !== 'GET') return;
+
+    const createScriptUrl = `chrome-extension://${chrome.runtime.id}/src/options/index.html?url=${encodeURIComponent(url)}`;
+    chrome.tabs.update(tabId, {url: createScriptUrl});
+    return {redirectUrl: createScriptUrl};
+}, {
+    urls: [
+        // 1. *:// comprises only http  /https
+        // 2. the API ignores #hash part
+        '*://*/*.user.js',
+        '*://*/*.user.js?*',
+    ],
+    types: ['main_frame'],
+});
+
 
 // https://developer.chrome.com/docs/extensions/reference/api/userScripts?hl=de#type-RegisteredUserScript
 // await chrome.userScripts.update(

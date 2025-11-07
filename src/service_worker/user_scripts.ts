@@ -40,13 +40,16 @@ export function parse(userScriptRaw: string): UserScript {
     if (metaTags.name?.length !== 1) {
         throw new Error('User script must have exactly one @name field.');
     }
+    if (metaTags.namespace?.length !== 1) {
+        throw new Error('User script must have exactly one @namespace field.');
+    }
     if (metaTags.version?.length > 1) {
         throw new Error('Ambiguous user script icon: multiple @version fields found.');
     }
     if (metaTags.description?.length > 1) {
         throw new Error('Ambiguous user script icon: multiple @description fields found.');
     }
-    if (metaTags['author']?.length > 1) {
+    if (metaTags.author?.length > 1) {
         throw new Error('Ambiguous user script icon: multiple @author fields found.');
     }
     if (metaTags['run-at']?.length > 1) {
@@ -57,12 +60,13 @@ export function parse(userScriptRaw: string): UserScript {
         raw: userScriptRaw,
         meta: {
             icon: metaTags.icon?.[0],
-            name: metaTags.name?.[0],
+            name: metaTags.name[0],
+            namespace: metaTags.namespace?.[0],
             version: metaTags.version?.[0],
             description: metaTags.description?.[0],
-            author: metaTags['author']?.[0],
+            author: metaTags.author?.[0],
             'run-at': metaTags['run-at']?.[0],
-            match: metaTags['match'],
+            match: metaTags.match,
         },
         code,
     };
@@ -263,6 +267,7 @@ export type UserScript = {
     meta: {
         icon?: string;
         name: string;
+        namespace?: string;
         version?: string;
         description?: string;
         author?: string;
