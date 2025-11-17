@@ -10,10 +10,15 @@ const userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespace
 const extensionInstanceId = crypto.randomUUID()
 
 export async function load() {
-    // clear all registered user script
-    await chrome.userScripts.unregister();
-    for (const userscript of await storageSyncGetUserScripts()) {
-        await set(userscript, false);
+    try {
+        // clear all registered user script
+        await chrome.userScripts.unregister();
+        const userscripts = await storageSyncGetUserScripts();
+        for (const userscript of userscripts) {
+            await set(userscript, false);
+        }
+    } catch (error) {
+        console.error('Failed to load user scripts:', error);
     }
 
     // --- storage
@@ -25,12 +30,16 @@ export async function load() {
                     continue;
                 }
 
-                if (change.newValue) {
-                    const newUserScript = decodeStorageEntry<UserScript>(change.newValue);
-                    set(newUserScript, false);
-                } else {
-                    const oldUserScript = decodeStorageEntry<UserScript>(change.oldValue);
-                    remove(oldUserScript.id, false)
+                try {
+                    if (change.newValue) {
+                        const newUserScript = decodeStorageEntry<UserScript>(change.newValue);
+                        set(newUserScript, false);
+                    } else if (change.oldValue) {
+                        const oldUserScript = decodeStorageEntry<UserScript>(change.oldValue);
+                        remove(oldUserScript.id, false)
+                    }
+                } catch (error) {
+                    console.error('Failed to process storage change:', error);
                 }
             }
         }
@@ -80,31 +89,41 @@ export async function set(userScript_: Optional<UserScript, 'id'>, store = true)
         await storageSyncSetUserScript(userScript);
     }
 
-    const userScriptExists = await chrome.userScripts.getScripts({ids: [userScript.id]})
-        .then(scripts => !!scripts[0]);
+    try {
+        const userScriptExists = await chrome.userScripts.getScripts({ids: [userScript.id]})
+            .then(scripts => !!scripts[0]);
 
-    if (userScript.enabled) {
-        const registeredUserScript = buildRegisteredUserScript(userScript);
-        if (userScriptExists) {
-            await chrome.userScripts.update([registeredUserScript]);
+        if (userScript.enabled) {
+            const registeredUserScript = buildRegisteredUserScript(userScript);
+            if (userScriptExists) {
+                await chrome.userScripts.update([registeredUserScript]);
+            } else {
+                await chrome.userScripts.register([registeredUserScript]);
+            }
         } else {
-            await chrome.userScripts.register([registeredUserScript]);
+            if (userScriptExists) {
+                await chrome.userScripts.unregister({ids: [userScript.id]});
+            }
         }
-    } else {
-        if (userScriptExists) {
-            await chrome.userScripts.unregister({ids: [userScript.id]});
-        }
+    } catch (error) {
+        console.error('Failed to register/update user script:', error);
+        throw error;
     }
-
 
     return userScript
 }
 
 export async function remove(id: string, store = true): Promise<void> {
-    if (store) {
-        await chrome.storage.sync.remove(id);
+    try {
+        if (store) {
+            const key = userScriptStorageKeyPrefix + id;
+            await chrome.storage.sync.remove(key);
+        }
+        await chrome.userScripts.unregister({ids: [id]});
+    } catch (error) {
+        console.error('Failed to remove user script:', error);
+        throw error;
     }
-    await chrome.userScripts.unregister({ids: [id]});
 }
 
 function buildRegisteredUserScript(userScript: UserScript): RegisteredUserScript {
@@ -142,27 +161,38 @@ export async function get(id: string) {
 }
 
 export function parse(userScriptRaw: string): UserScriptMeta {
+    if (!userScriptRaw || typeof userScriptRaw !== 'string') {
+        throw new Error('Invalid userscript: input must be a non-empty string');
+    }
+
     const userScriptRegexp = /\B\/\/ ==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/ ==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
-    const userScriptMatch = userScriptRaw?.match(userScriptRegexp)
+    const userScriptMatch = userScriptRaw.match(userScriptRegexp)
     if (!userScriptMatch?.groups) {
-        throw new Error('Invalid userscript format:\n' + userScriptRaw);
+        throw new Error('Invalid userscript format: missing ==UserScript== block');
     }
     const {metaContent, code} = userScriptMatch.groups;
 
     const metaTags = {} as Record<string, string[]>;
-    metaContent.split('\n').forEach(function (line) {
+    const lines = metaContent.split('\n').filter(line => line.trim());
+    
+    for (const line of lines) {
         const lineMatch = line.match(/@(?<key>[\w-]+)\s+(?<value>.+)/);
         if (!lineMatch?.groups) {
-            throw new Error('Invalid userscript meta tag: ' + line);
+            // Skip lines that don't match the expected format (e.g., comments)
+            continue;
         }
 
         const {key, value} = lineMatch.groups;
         metaTags[key] ??= [];
-        metaTags[key].push(value);
-    });
+        metaTags[key].push(value.trim());
+    }
 
-    if (metaTags.name?.length !== 1) {
+    if (!metaTags.name || metaTags.name.length !== 1) {
         throw new Error('User script must have exactly one @name field.');
+    }
+
+    if (!metaTags.match || metaTags.match.length === 0) {
+        throw new Error('User script must have at least one @match field.');
     }
 
     /**
@@ -210,16 +240,26 @@ type StorageEntry = {
 // TODO move to frontend
 export function determineIcon(userScriptMeta: UserScriptMeta): string | undefined {
     if (userScriptMeta.icon) {
-        return userScriptMeta.icon;
+        // Validate that the icon URL is safe (http/https only)
+        try {
+            const iconUrl = new URL(userScriptMeta.icon);
+            if (iconUrl.protocol === 'http:' || iconUrl.protocol === 'https:') {
+                return userScriptMeta.icon;
+            }
+        } catch {
+            // Invalid URL, ignore
+        }
     }
 
     const match = userScriptMeta.match?.[0];
     if (match) {
         try {
-            const matchHost = new URL(match).host;
-            return 'https://www.google.com/s2/favicons?sz=64&domain=' + matchHost;
+            const matchUrl = new URL(match);
+            const matchHost = matchUrl.host;
+            // Encode the domain to prevent potential XSS
+            return 'https://www.google.com/s2/favicons?sz=64&domain=' + encodeURIComponent(matchHost);
         } catch {
-            // ignore
+            // ignore invalid URL
         }
     }
 }
@@ -227,36 +267,80 @@ export function determineIcon(userScriptMeta: UserScriptMeta): string | undefine
 // ----- Synced Storage ----------
 
 async function storageSyncSetUserScript(userScript: UserScript) {
-    const entry = encodeStorageEntry(userScript);
-    const entryKey = userScriptStorageKeyPrefix + userScript.id;
-    return await chrome.storage.sync.set({[entryKey]: entry});
+    try {
+        const entry = encodeStorageEntry(userScript);
+        const entryKey = userScriptStorageKeyPrefix + userScript.id;
+        await chrome.storage.sync.set({[entryKey]: entry});
+    } catch (error) {
+        console.error('Failed to save user script to storage:', error);
+        throw error;
+    }
 }
 
 async function storageSyncGetUserScripts() {
-    return await chrome.storage.sync.get().then((entries) => {
+    try {
+        const entries = await chrome.storage.sync.get();
         return Object.entries(entries)
             .filter(([key]) => key.startsWith(userScriptStorageKeyPrefix))
-            .map(([_, value]) => decodeStorageEntry<UserScript>(value));
-    });
+            .map(([_, value]) => {
+                try {
+                    return decodeStorageEntry<UserScript>(value);
+                } catch (error) {
+                    console.error('Failed to decode storage entry:', error);
+                    return null;
+                }
+            })
+            .filter((script): script is UserScript => script !== null);
+    } catch (error) {
+        console.error('Failed to get user scripts from storage:', error);
+        return [];
+    }
 }
 
 async function storageSyncGetUserScript(id: string) {
-    const key = userScriptStorageKeyPrefix + id;
-    return await chrome.storage.sync.get(key)
-        .then((data) => data?.[key])
-        .then((value) => value ? decodeStorageEntry<UserScript>(value) : null);
+    try {
+        const key = userScriptStorageKeyPrefix + id;
+        const data = await chrome.storage.sync.get(key);
+        const value = data?.[key];
+        return value ? decodeStorageEntry<UserScript>(value) : null;
+    } catch (error) {
+        console.error('Failed to get user script from storage:', error);
+        return null;
+    }
 }
 
 
 function encodeStorageEntry(payload: any): StorageEntry {
-    return {
-        origin: extensionInstanceId,
-        payload: LZString.compressToBase64(JSON.stringify(payload)),
+    if (!payload) {
+        throw new Error('Cannot encode null or undefined payload');
+    }
+    try {
+        const jsonString = JSON.stringify(payload);
+        const compressed = LZString.compressToBase64(jsonString);
+        return {
+            origin: extensionInstanceId,
+            payload: compressed,
+        }
+    } catch (error) {
+        console.error('Failed to encode storage entry:', error);
+        throw error;
     }
 }
 
 function decodeStorageEntry<T>(entry: StorageEntry): T {
-    return JSON.parse(LZString.decompressFromBase64(entry.payload)) as T;
+    if (!entry || !entry.payload) {
+        throw new Error('Invalid storage entry: missing payload');
+    }
+    try {
+        const decompressed = LZString.decompressFromBase64(entry.payload);
+        if (!decompressed) {
+            throw new Error('Failed to decompress storage entry');
+        }
+        return JSON.parse(decompressed) as T;
+    } catch (error) {
+        console.error('Failed to decode storage entry:', error);
+        throw error;
+    }
 }
 
 

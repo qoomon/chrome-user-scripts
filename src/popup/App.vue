@@ -11,14 +11,29 @@ onBeforeMount(async () => {
   // TODO display tab scripts only
   // const currentTabId = await chrome.tabs.query({active: true, currentWindow: true})
   //     .then(tabs => tabs[0]?.id ?? null);
-  userScripts.value = (await UserScripts.getAll()).map((script) => {
-    const userScriptMeta = UserScripts.parse(script.code);
-    return {
-      ...userScriptMeta,
-      ...script,
-    }
-  });
-  console.log("userScripts:", userScripts.value);
+  try {
+    const scripts = await UserScripts.getAll();
+    userScripts.value = scripts.map((script) => {
+      try {
+        const userScriptMeta = UserScripts.parse(script.code);
+        return {
+          ...userScriptMeta,
+          ...script,
+        }
+      } catch (error) {
+        console.error('Failed to parse user script:', error);
+        // Return a basic object with error information
+        return {
+          ...script,
+          name: 'Invalid Script',
+          description: `Error: ${error instanceof Error ? error.message : 'Parse failed'}`,
+        };
+      }
+    });
+    console.log("userScripts:", userScripts.value);
+  } catch (error) {
+    console.error('Failed to load user scripts:', error);
+  }
 });
 
 function openOptionsPage() {
@@ -29,11 +44,16 @@ function closePopup() {
   window.close();
 }
 
-function saveUserScript(userScript: UserScript) {
+async function saveUserScript(userScript: UserScript) {
   if (!userScript) {
-    throw new Error("No user script to save");
+    console.error("No user script to save");
+    return;
   }
-  UserScripts.set(userScript);
+  try {
+    await UserScripts.set(userScript);
+  } catch (error) {
+    console.error('Failed to save user script:', error);
+  }
 }
 </script>
 

@@ -24,36 +24,66 @@ const editorUserScript = ref<Optional<UserScript, 'id'>>();
 onBeforeMount(async () => {
   const queryParams = new URL(location.href).searchParams;
   if (queryParams.get('url')) {
-    // TODO
     const scriptUrl = queryParams.get('url')!;
-    const code = await fetch(scriptUrl).then((res) => res.text());
-    editorUserScript.value = {
-      enabled: true,
-      code,
-    };
+    try {
+      const response = await fetch(scriptUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch script: ${response.status} ${response.statusText}`);
+      }
+      const code = await response.text();
+      editorUserScript.value = {
+        enabled: true,
+        code,
+      };
 
-    const url = new URL(location.href);
-    url.searchParams.delete('url');
-    window.history.pushState(null, '', url.toString());
+      const url = new URL(location.href);
+      url.searchParams.delete('url');
+      window.history.pushState(null, '', url.toString());
+    } catch (error) {
+      console.error('Failed to load user script from URL:', error);
+      alert(`Failed to load user script: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   } else if (queryParams.get('id')) {
     const scriptId = queryParams.get('id')!;
-    const userScript = await UserScripts.get(scriptId);
-    console.log("userScript:", userScript);
-    if (!userScript) {
-      // TODO
-      return;
+    try {
+      const userScript = await UserScripts.get(scriptId);
+      console.log("userScript:", userScript);
+      if (!userScript) {
+        console.error('User script not found:', scriptId);
+        alert('User script not found');
+        return;
+      }
+      editorUserScript.value = userScript;
+    } catch (error) {
+      console.error('Failed to load user script:', error);
+      alert(`Failed to load user script: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-    editorUserScript.value = userScript;
 
   } else {
-    userScripts.value = (await UserScripts.getAll()).map((script) => {
-      const userScriptMeta = UserScripts.parse(script.code);
-      return {
-        ...userScriptMeta,
-        ...script,
-      }
-    });
-    console.log("userScripts:", userScripts.value);
+    try {
+      const scripts = await UserScripts.getAll();
+      userScripts.value = scripts.map((script) => {
+        try {
+          const userScriptMeta = UserScripts.parse(script.code);
+          return {
+            ...userScriptMeta,
+            ...script,
+          }
+        } catch (error) {
+          console.error('Failed to parse user script:', error);
+          // Return a basic object with error information
+          return {
+            ...script,
+            name: 'Invalid Script',
+            description: `Error: ${error instanceof Error ? error.message : 'Parse failed'}`,
+          };
+        }
+      });
+      console.log("userScripts:", userScripts.value);
+    } catch (error) {
+      console.error('Failed to load user scripts:', error);
+      alert(`Failed to load user scripts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 });
 
@@ -83,25 +113,35 @@ function closeUserScript() {
 }
 
 async function saveUserScript(userScript_: Optional<UserScript, 'id'>) {
-  const userScript = await UserScripts.set(userScript_);
-  userScript_.id = userScript.id;
+  try {
+    const userScript = await UserScripts.set(userScript_);
+    userScript_.id = userScript.id;
 
-  // TODO move somewhere else
-  if(editorUserScript.value){
-    const url = new URL(location.href);
-    url.searchParams.set('id', userScript.id);
-    window.history.pushState(null, '', url.toString());
+    // TODO move somewhere else
+    if(editorUserScript.value){
+      const url = new URL(location.href);
+      url.searchParams.set('id', userScript.id);
+      window.history.pushState(null, '', url.toString());
+    }
+  } catch (error) {
+    console.error('Failed to save user script:', error);
+    alert(`Failed to save user script: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 async function removeUserScript(userScript: UserScript) {
-  await UserScripts.remove(userScript.id);
-  if (editorUserScript.value) {
-    if (editorUserScript.value.id === userScript.id) {
-      closeUserScript();
+  try {
+    await UserScripts.remove(userScript.id);
+    if (editorUserScript.value) {
+      if (editorUserScript.value.id === userScript.id) {
+        closeUserScript();
+      }
+    } else {
+      userScripts.value = userScripts.value?.filter((script) => script.id !== userScript.id);
     }
-  } else {
-    userScripts.value = userScripts.value?.filter((script) => script.id !== userScript.id);
+  } catch (error) {
+    console.error('Failed to remove user script:', error);
+    alert(`Failed to remove user script: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 </script>
