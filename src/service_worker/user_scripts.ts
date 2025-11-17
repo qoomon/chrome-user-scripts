@@ -4,10 +4,18 @@ import LZString from "lz-string";
 import StorageChange = chrome.storage.StorageChange;
 import {Optional} from "@/common.ts";
 
-const storageNamespaceSeparator = '::';
-const userScriptStorageNamespace = 'userscripts';
-const userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
+// Storage configuration
+const STORAGE_NAMESPACE_SEPARATOR = '::';
+const USERSCRIPT_STORAGE_NAMESPACE = 'userscripts';
+const USERSCRIPT_STORAGE_KEY_PREFIX = USERSCRIPT_STORAGE_NAMESPACE + STORAGE_NAMESPACE_SEPARATOR;
 const extensionInstanceId = crypto.randomUUID()
+
+// UserScript metadata constants
+const DEFAULT_RUN_AT: RunAt = 'document_idle';
+const DEFAULT_WORLD = 'USER_SCRIPT' as const;
+
+// Events
+const USER_SCRIPT_INJECTED_EVENT = 'USER_SCRIPT_INJECTED';
 
 export async function load() {
     try {
@@ -116,7 +124,7 @@ export async function set(userScript_: Optional<UserScript, 'id'>, store = true)
 export async function remove(id: string, store = true): Promise<void> {
     try {
         if (store) {
-            const key = userScriptStorageKeyPrefix + id;
+            const key = USERSCRIPT_STORAGE_KEY_PREFIX + id;
             await chrome.storage.sync.remove(key);
         }
         await chrome.userScripts.unregister({ids: [id]});
@@ -131,13 +139,13 @@ function buildRegisteredUserScript(userScript: UserScript): RegisteredUserScript
     return {
         id: userScript.id,
         matches: userScriptMeta.match,
-        runAt: userScriptMeta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
-        world: "USER_SCRIPT", // "MAIN" | "USER_SCRIPT",
+        runAt: userScriptMeta['run-at']?.replace('-', '_') as RunAt ?? DEFAULT_RUN_AT,
+        world: DEFAULT_WORLD,
         js: [
             {
                 code: functionCallAsString(
                     (userScriptId: string) => chrome.runtime.sendMessage({
-                        event: 'USER_SCRIPT_INJECTED', userScriptId,
+                        event: USER_SCRIPT_INJECTED_EVENT, userScriptId,
                     }), userScript.id,
                 )
             },
@@ -148,15 +156,18 @@ function buildRegisteredUserScript(userScript: UserScript): RegisteredUserScript
     };
 }
 
-function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<typeof fn>) {
+function functionCallAsString<T extends unknown[]>(
+    fn: (...args: T) => unknown, 
+    ...args: T
+): string {
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
 }
 
-export async function getAll() {
+export async function getAll(): Promise<UserScript[]> {
     return await storageSyncGetUserScripts()
 }
 
-export async function get(id: string) {
+export async function get(id: string): Promise<UserScript | null> {
     return await storageSyncGetUserScript(id);
 }
 
@@ -234,7 +245,7 @@ export type UserScriptMeta = {
 
 type StorageEntry = {
     origin: string,
-    payload: any,
+    payload: string,
 }
 
 // TODO move to frontend
@@ -269,7 +280,7 @@ export function determineIcon(userScriptMeta: UserScriptMeta): string | undefine
 async function storageSyncSetUserScript(userScript: UserScript) {
     try {
         const entry = encodeStorageEntry(userScript);
-        const entryKey = userScriptStorageKeyPrefix + userScript.id;
+        const entryKey = USERSCRIPT_STORAGE_KEY_PREFIX + userScript.id;
         await chrome.storage.sync.set({[entryKey]: entry});
     } catch (error) {
         console.error('Failed to save user script to storage:', error);
@@ -281,7 +292,7 @@ async function storageSyncGetUserScripts() {
     try {
         const entries = await chrome.storage.sync.get();
         return Object.entries(entries)
-            .filter(([key]) => key.startsWith(userScriptStorageKeyPrefix))
+            .filter(([key]) => key.startsWith(USERSCRIPT_STORAGE_KEY_PREFIX))
             .map(([_, value]) => {
                 try {
                     return decodeStorageEntry<UserScript>(value);
@@ -299,7 +310,7 @@ async function storageSyncGetUserScripts() {
 
 async function storageSyncGetUserScript(id: string) {
     try {
-        const key = userScriptStorageKeyPrefix + id;
+        const key = USERSCRIPT_STORAGE_KEY_PREFIX + id;
         const data = await chrome.storage.sync.get(key);
         const value = data?.[key];
         return value ? decodeStorageEntry<UserScript>(value) : null;
@@ -310,7 +321,7 @@ async function storageSyncGetUserScript(id: string) {
 }
 
 
-function encodeStorageEntry(payload: any): StorageEntry {
+function encodeStorageEntry<T>(payload: T): StorageEntry {
     if (!payload) {
         throw new Error('Cannot encode null or undefined payload');
     }
