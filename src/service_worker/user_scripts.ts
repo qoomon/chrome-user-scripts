@@ -1,20 +1,147 @@
-import {
-    createStorageEntry,
-    getStorageEntryKey,
-    getStorageEntryNamespace,
-    isLocalStorageEntry, StorageEntry
-} from "@/service_worker/storge.ts";
 import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
 import RunAt = chrome.extensionTypes.RunAt;
+import LZString from "lz-string";
+import StorageChange = chrome.storage.StorageChange;
+import {Optional} from "@/common.ts";
 
-const userScriptNamespaceSeparator = ' > ';
+const storageNamespaceSeparator = '::';
 const userScriptStorageNamespace = 'userscripts';
+const userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
+const extensionInstanceId = crypto.randomUUID()
 
-chrome.userScripts.configureWorld({
-    messaging: true,
-});
+export async function load() {
+    // clear all registered user script
+    await chrome.userScripts.unregister();
+    for (const userscript of await storageSyncGetUserScripts()) {
+        await set(userscript, false);
+    }
 
-export function parse(userScriptRaw: string): UserScript {
+    // --- storage
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'sync') {
+            for (const [_, change] of Object.entries(changes)) {
+                if (isOriginatedByExtensionInstance(change)) {
+                    continue;
+                }
+
+                if (change.newValue) {
+                    const newUserScript = decodeStorageEntry<UserScript>(change.newValue);
+                    set(newUserScript, false);
+                } else {
+                    const oldUserScript = decodeStorageEntry<UserScript>(change.oldValue);
+                    remove(oldUserScript.id, false)
+                }
+            }
+        }
+
+        function isOriginatedByExtensionInstance(change: StorageChange) {
+            return change.newValue?.origin === extensionInstanceId
+                || (!change.newValue && change.oldValue?.origin === extensionInstanceId);
+        }
+    });
+
+    // --- tabs
+
+    chrome.tabs.onRemoved.addListener(async (tabId) => {
+        console.log("tab", tabId, "removed");
+        // TODO delete tabsUserScriptIds[tabId];
+    });
+
+    chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+        console.log("tab", tabId, "updated:", changeInfo);
+        if (changeInfo.status === 'loading') {
+            // TODO delete tabsUserScriptIds[tabId];
+        }
+    });
+
+    // --- messages
+    await chrome.userScripts.configureWorld({messaging: true});
+
+    chrome.runtime.onUserScriptMessage.addListener((message, sender) => {
+        const tabId = sender.tab?.id;
+        if (!tabId) return;
+
+        if (message.event === 'USER_SCRIPT_INJECTED') {
+            // TODO  const tabUserScriptIds = tabsUserScriptIds[tabId] ??= [];
+            // TODO tabUserScriptIds.push(message.userScriptId);
+            // TODO  emit event for service worker
+        }
+    });
+}
+
+export async function set(userScript_: Optional<UserScript, 'id'>, store = true): Promise<UserScript> {
+    const userScript = {
+        ...userScript_,
+        id: userScript_.id ?? crypto.randomUUID(),
+    };
+
+    if (store) {
+        await storageSyncSetUserScript(userScript);
+    }
+
+    const userScriptExists = await chrome.userScripts.getScripts({ids: [userScript.id]})
+        .then(scripts => !!scripts[0]);
+
+    if (userScript.enabled) {
+        const registeredUserScript = buildRegisteredUserScript(userScript);
+        if (userScriptExists) {
+            await chrome.userScripts.update([registeredUserScript]);
+        } else {
+            await chrome.userScripts.register([registeredUserScript]);
+        }
+    } else {
+        if (userScriptExists) {
+            await chrome.userScripts.unregister({ids: [userScript.id]});
+        }
+    }
+
+
+    return userScript
+}
+
+export async function remove(id: string, store = true): Promise<void> {
+    if (store) {
+        await chrome.storage.sync.remove(id);
+    }
+    await chrome.userScripts.unregister({ids: [id]});
+}
+
+function buildRegisteredUserScript(userScript: UserScript): RegisteredUserScript {
+    const userScriptMeta = parse(userScript.code);
+    return {
+        id: userScript.id,
+        matches: userScriptMeta.match,
+        runAt: userScriptMeta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
+        world: "USER_SCRIPT", // "MAIN" | "USER_SCRIPT",
+        js: [
+            {
+                code: functionCallAsString(
+                    (userScriptId: string) => chrome.runtime.sendMessage({
+                        event: 'USER_SCRIPT_INJECTED', userScriptId,
+                    }), userScript.id,
+                )
+            },
+            {
+                code: userScriptMeta.code,
+            },
+        ],
+    };
+}
+
+function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<typeof fn>) {
+    return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
+}
+
+export async function getAll() {
+    return await storageSyncGetUserScripts()
+}
+
+export async function get(id: string) {
+    return await storageSyncGetUserScript(id);
+}
+
+export function parse(userScriptRaw: string): UserScriptMeta {
     const userScriptRegexp = /\B\/\/ ==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/ ==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
     const userScriptMatch = userScriptRaw?.match(userScriptRegexp)
     if (!userScriptMatch?.groups) {
@@ -34,269 +161,149 @@ export function parse(userScriptRaw: string): UserScript {
         metaTags[key].push(value);
     });
 
-    if (metaTags.icon?.length > 1) {
-        throw new Error('Ambiguous user script icon: multiple @icon fields found.');
-    }
     if (metaTags.name?.length !== 1) {
         throw new Error('User script must have exactly one @name field.');
     }
-    if (metaTags.namespace?.length !== 1) {
-        throw new Error('User script must have exactly one @namespace field.');
-    }
-    if (metaTags.version?.length > 1) {
-        throw new Error('Ambiguous user script icon: multiple @version fields found.');
-    }
-    if (metaTags.description?.length > 1) {
-        throw new Error('Ambiguous user script icon: multiple @description fields found.');
-    }
-    if (metaTags.author?.length > 1) {
-        throw new Error('Ambiguous user script icon: multiple @author fields found.');
-    }
-    if (metaTags['run-at']?.length > 1) {
-        throw new Error('Ambiguous user script icon: multiple @run-at fields found.');
-    }
+
+    /**
+     * https://violentmonkey.github.io/api/metadata-block/
+     * https://wiki.greasespot.net/Metadata_Block
+     * https://www.tampermonkey.net/documentation.php
+     */
 
     return {
-        raw: userScriptRaw,
-        meta: {
-            icon: metaTags.icon?.[0],
-            name: metaTags.name[0],
-            namespace: metaTags.namespace?.[0],
-            version: metaTags.version?.[0],
-            description: metaTags.description?.[0],
-            author: metaTags.author?.[0],
-            'run-at': metaTags['run-at']?.[0],
-            match: metaTags.match,
-        },
+        name: metaTags.name[0],
+        namespace: metaTags.namespace?.[0],
+        version: metaTags.version?.[0],
+        icon: metaTags.icon?.[0],
+        description: metaTags.description?.[0],
+        author: metaTags.author?.[0],
+        'run-at': metaTags['run-at']?.[0],
+        match: metaTags.match,
         code,
     };
 }
 
-export function getId({namespace, name}: { namespace?: string, name: string }): string {
-    if (namespace) {
-        return namespace + userScriptNamespaceSeparator + name;
-    }
-
-    return name;
-}
-
-// --- Storage ---
-
-const userScriptsLoaded = chrome.storage.sync.get().then(async (data) => {
-    for (const [key, value] of Object.entries(data) as [string, StorageEntry][]) {
-        if (getStorageEntryNamespace(key) === userScriptStorageNamespace) {
-            await setUserScript(value.data);
-        }
-    }
-});
-const userScripts = {} as Record<string, BrowserUserScript>;
-const tabsUserScriptIds = {} as Record<string, string[]>;
-
-chrome.storage.onChanged.addListener(async (changes, namespace) => {
-    console.debug("storage.onChanged:", {namespace, changes});
-    for (const [key, {oldValue, newValue}] of Object.entries(changes) as
-        [string, { oldValue: StorageEntry, newValue: StorageEntry }][]) {
-        if (isLocalStorageEntry(newValue) || isLocalStorageEntry(oldValue)) {
-            // skip local storage changes
-            continue;
-        }
-
-        if (namespace === 'sync') {
-            if (getStorageEntryNamespace(key) === userScriptStorageNamespace) {
-                if (newValue) {
-                    await setUserScript(newValue.data);
-                } else {
-                    await removeUserScript(oldValue.data.id);
-                }
-            }
-        }
-    }
-});
-
-// --- User scripts management ---
-
-export type Config = {
-    enabled: boolean;
-}
-
-let _config: Config;
-
-export async function getConfig(): Promise<Config> {
-    if (!_config) {
-        _config = {
-            enabled: true,
-            ...(await chrome.storage.local.get('config')
-                .then((data) => data['config']?.data)),
-        }
-    }
-    return _config;
-}
-
-export async function setConfig(partialConfig: Partial<Config>) {
-    Object.assign(_config, partialConfig);
-    await chrome.storage.local.set({
-        ['config']: createStorageEntry(_config),
-    });
-
-    if (partialConfig.enabled !== _config.enabled) {
-        if (partialConfig.enabled === false) {
-            // Unregister all user scripts
-            const registeredScripts = await chrome.userScripts.getScripts();
-            if (registeredScripts.length > 0) {
-                console.debug(`Unregistering ALL user scripts as the feature is disabled.`);
-                await chrome.userScripts.unregister({ids: registeredScripts.map(s => s.id)});
-            }
-        }
-        if (partialConfig.enabled === true) {
-            // Register all enabled user scripts
-            for (const userScript of Object.values(userScripts)) {
-                await setUserScript(userScript);
-            }
-        }
-    }
-}
-
-
-export async function setUserScript(userScript: BrowserUserScript, storage = false) {
-    if (!userScript.meta.name) {
-        throw new Error('User script must have a name.');
-    }
-
-    if ((await getConfig()).enabled) {
-        if (userScript.enabled) {
-            /**@type {chrome.userScripts.RegisteredUserScript} */
-            const registeredUserScript: RegisteredUserScript = {
-                id: userScript.id,
-                matches: userScript.meta['match'],
-                runAt: userScript.meta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
-                world: "USER_SCRIPT", // "MAIN" | "USER_SCRIPT",
-                js: [
-                    {
-                        code: functionCallAsString(
-                            (userScriptId: string) => chrome.runtime.sendMessage({
-                                event: 'USER_SCRIPT_INJECTED', userScriptId,
-                            }),
-                            userScript.id,
-                        )
-                    },
-                    {code: userScript.code},
-                ],
-            };
-
-            if (await chrome.userScripts.getScripts({ids: [userScript.id]})
-                .then(scripts => scripts[0])) {
-                console.debug(`Updating user script with ID "${userScript.id}".`);
-                await chrome.userScripts.update([registeredUserScript]);
-            } else {
-                console.debug(`Registering user script with ID "${userScript.id}".`);
-                await chrome.userScripts.register([registeredUserScript]);
-            }
-        } else {
-            if (userScripts[userScript.id]) {
-                console.debug(`Unregistering user script with ID "${userScript.id}".`);
-                await chrome.userScripts.unregister({ids: [userScript.id]});
-            }
-        }
-    }
-
-    userScripts[userScript.id] = userScript;
-
-    if (storage) {
-        console.debug(`Saving user script with ID "${userScript.id}" to storage.`);
-        await chrome.storage.sync.set({
-            [getStorageEntryKey('userscripts', userScript.id)]: createStorageEntry(userScript),
-        });
-    }
-
-    return userScript;
-}
-
-export async function getUserScript(id: string) {
-    await userScriptsLoaded;
-    const userScript = userScripts[id];
-    if (!userScript) {
-        throw new Error(`User script with ID "${id}" is unknown.`);
-    }
-    // Deep copy
-    return JSON.parse(JSON.stringify(userScript)) as BrowserUserScript;
-
-    // TODO
-    // await chrome.storage.sync.get(getStorageEntryKey(userScriptStorageNamespace, id))
-    //     .then((data) => data.data);
-}
-
-export async function getUserScripts(tabId?: string) {
-    await userScriptsLoaded;
-    if (tabId !== undefined) {
-        const tabUserScriptIds = tabsUserScriptIds[tabId] ?? [];
-        return Promise.all(tabUserScriptIds.map(getUserScript));
-    }
-    return Promise.all(Object.keys(userScripts).map(getUserScript));
-}
-
-export async function removeUserScript(id: string, storage = false) {
-    if (await chrome.userScripts.getScripts({ids: [id]})
-        .then(scripts => scripts[0])) {
-        await chrome.userScripts.unregister({ids: [id]});
-        delete userScripts[id];
-
-        if (storage) {
-            console.debug(`Removing user script with ID "${id}" from storage.`);
-            await chrome.storage.sync.remove(
-                getStorageEntryKey(userScriptStorageNamespace, id),
-            );
-        }
-    }
-}
-
-// --- Utils ---
-
-function functionCallAsString(fn: (...args: any[]) => any, ...args: any[]) {
-    return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
-}
-
-// --- Types ---
-
-/**
- * https://violentmonkey.github.io/api/metadata-block/
- * https://wiki.greasespot.net/Metadata_Block
- * https://www.tampermonkey.net/documentation.php
- */
 export type UserScript = {
-    raw: string;
-    meta: {
-        icon?: string;
-        name: string;
-        namespace?: string;
-        version?: string;
-        description?: string;
-        author?: string;
-        'run-at'?: string;
-        match?: string[];
-    };
+    id: string;
+    enabled: boolean;
     code: string;
 }
 
-export type BrowserUserScript = UserScript & {
-    id: string;
-    enabled: boolean;
+export type UserScriptMeta = {
+    name: string;
+    namespace?: string;
+    version?: string;
+    icon?: string;
+    description?: string;
+    author?: string;
+    'run-at'?: string;
+    match?: string[];
+    code: string;
 }
 
-export function determineIcon(userScript: UserScript): string | undefined {
-    if(userScript.meta.icon) {
-        return userScript.meta.icon;
+type StorageEntry = {
+    origin: string,
+    payload: any,
+}
+
+// TODO move to frontend
+export function determineIcon(userScriptMeta: UserScriptMeta): string | undefined {
+    if (userScriptMeta.icon) {
+        return userScriptMeta.icon;
     }
-    try {
-        const match = userScript.meta.match?.[0];
-        if(match) {
+
+    const match = userScriptMeta.match?.[0];
+    if (match) {
+        try {
             const matchHost = new URL(match).host;
             return 'https://www.google.com/s2/favicons?sz=64&domain=' + matchHost;
+        } catch {
+            // ignore
         }
-
-    } catch {
-
     }
-
-    return undefined;
 }
+
+// ----- Synced Storage ----------
+
+async function storageSyncSetUserScript(userScript: UserScript) {
+    const entry = encodeStorageEntry(userScript);
+    const entryKey = userScriptStorageKeyPrefix + userScript.id;
+    return await chrome.storage.sync.set({[entryKey]: entry});
+}
+
+async function storageSyncGetUserScripts() {
+    return await chrome.storage.sync.get().then((entries) => {
+        return Object.entries(entries)
+            .filter(([key]) => key.startsWith(userScriptStorageKeyPrefix))
+            .map(([_, value]) => decodeStorageEntry<UserScript>(value));
+    });
+}
+
+async function storageSyncGetUserScript(id: string) {
+    const key = userScriptStorageKeyPrefix + id;
+    return await chrome.storage.sync.get(key)
+        .then((data) => data?.[key])
+        .then((value) => value ? decodeStorageEntry<UserScript>(value) : null);
+}
+
+
+function encodeStorageEntry(payload: any): StorageEntry {
+    return {
+        origin: extensionInstanceId,
+        payload: LZString.compressToBase64(JSON.stringify(payload)),
+    }
+}
+
+function decodeStorageEntry<T>(entry: StorageEntry): T {
+    return JSON.parse(LZString.decompressFromBase64(entry.payload)) as T;
+}
+
+
+//
+// // --- User scripts management ---
+//
+// export type Config = {
+//     enabled: boolean;
+// }
+//
+// let _config: Config;
+//
+// export async function getConfig(): Promise<Config> {
+//     if (!_config) {
+//         _config = {
+//             enabled: true,
+//             ...(await chrome.storage.local.get('config')
+//                 .then((data) => data['config'])),
+//         }
+//     }
+//     return _config;
+// }
+//
+// export async function setConfig(partialConfig: Partial<Config>) {
+//     Object.assign(_config, partialConfig);
+//     await chrome.storage.local.set({
+//         ['config']: addStorageMeta(_config),
+//     });
+//
+//     if (partialConfig.enabled !== _config.enabled) {
+//         if (partialConfig.enabled === false) {
+//             // Unregister all user scripts
+//             const registeredScripts = await chrome.userScripts.getScripts();
+//             if (registeredScripts.length > 0) {
+//                 console.debug(`Unregistering ALL user scripts as the feature is disabled.`);
+//                 await chrome.userScripts.unregister({ids: registeredScripts.map(s => s.id)});
+//             }
+//         }
+//         if (partialConfig.enabled === true) {
+//             // Register all enabled user scripts
+//             for (const userScript of Object.values(userScripts)) {
+//                 await setUserScript(userScript);
+//             }
+//         }
+//     }
+// }
+//
+//
+
 

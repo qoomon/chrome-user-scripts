@@ -1,42 +1,18 @@
 import * as UserScripts from "@/service_worker/user_scripts.ts";
 
-(async () => {
-    await UserScripts.getConfig();
-})();
-
-chrome.action.onClicked.addListener(async () => {
-    await chrome.runtime.openOptionsPage();
+chrome.runtime.onStartup.addListener(() => {
+    UserScripts.load();
 })
 
-// --- Tab user scripts tracking ---
-const tabsUserScriptIds = {} as Record<string, string[]>;
+chrome.action.onClicked.addListener(() => {
+    chrome.runtime.openOptionsPage();
+})
 
-chrome.runtime.onUserScriptMessage.addListener(async (message, sender) => {
-    console.debug("runtime.onUserScriptMessage", {sender, message});
-    const tabId = sender.tab?.id;
-    if (!tabId) return;
-
-    if (message.event === 'USER_SCRIPT_INJECTED') {
-        const tabUserScriptIds = tabsUserScriptIds[tabId] ??= [];
-        tabUserScriptIds.push(message.userScriptId);
-        await chrome.action.setBadgeText({
-            tabId,
-            text: tabUserScriptIds.length.toString(),
-        });
-    }
-});
-
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-    console.log("tab", tabId, "removed");
-    delete tabsUserScriptIds[tabId];
-});
-
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-    console.log("tab", tabId, "updated:", changeInfo);
-    if (changeInfo.status === 'loading') {
-        delete tabsUserScriptIds[tabId];
-    }
-});
+// TODO listen on user script events
+//   chrome.action.setBadgeText({
+//             tabId,
+//             text: tabUserScriptIds.length.toString(),
+//         });
 
 chrome.webRequest.onBeforeRequest.addListener(({method, tabId, url}) => {
     if (method !== 'GET') return;

@@ -7,3 +7,6 @@ export async function sendRuntimeMessage(message: any) {
             return res;
         });
 }
+
+
+export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;

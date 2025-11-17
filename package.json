@@ -8,6 +8,7 @@
     "build": "vue-tsc -b && vite build"
   },
   "dependencies": {
+    "lz-string": "^1.5.0",
     "material-symbols": "^0.39.1",
     "monaco-editor": "^0.54.0",
     "monaco-editor-vue3": "^1.0.4",

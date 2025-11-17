@@ -2,16 +2,23 @@
 import CrIcon from "@/components/cr-icon.vue";
 import {onBeforeMount, ref} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {BrowserUserScript} from "@/service_worker/user_scripts.ts";
 import CrToggle from "@/components/cr-toggle.vue";
+import {UserScript, UserScriptMeta} from "@/service_worker/user_scripts.ts";
 
-const userScripts = ref<BrowserUserScript[]>();
+const userScripts = ref<(UserScriptMeta & Omit<UserScript, 'code'>)[]>();
 
 onBeforeMount(async () => {
+  // TODO display tab scripts only
   // const currentTabId = await chrome.tabs.query({active: true, currentWindow: true})
   //     .then(tabs => tabs[0]?.id ?? null);
-  // TODO display tab scripts only
-  userScripts.value = await UserScripts.getUserScripts();
+  userScripts.value = (await UserScripts.getAll()).map((script) => {
+    const userScriptMeta = UserScripts.parse(script.code);
+    return {
+      ...userScriptMeta,
+      ...script,
+    }
+  });
+  console.log("userScripts:", userScripts.value);
 });
 
 function openOptionsPage() {
@@ -22,14 +29,11 @@ function closePopup() {
   window.close();
 }
 
-function saveUserScript(userScript: BrowserUserScript) {
+function saveUserScript(userScript: UserScript) {
   if (!userScript) {
     throw new Error("No user script to save");
   }
-  UserScripts.setUserScript({
-    ...userScript,
-    ...UserScripts.parse(userScript.raw),
-  }, true);
+  UserScripts.set(userScript);
 }
 </script>
 
@@ -43,9 +47,9 @@ function saveUserScript(userScript: BrowserUserScript) {
 
     <div id="user-scripts">
       <div class="user-script" v-for="userScript in userScripts" :key="userScript.id">
-        <img id="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript) ?? '' "
+        <img id="icon" :src="userScript.icon ?? UserScripts.determineIcon(userScript) ?? '' "
         @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
-        <div>{{ userScript.meta.name }}</div>
+        <div>{{ userScript.name }}</div>
         <cr-toggle v-model="userScript.enabled" style="margin-left: auto;"
         @click="saveUserScript(userScript)"/>
       </div>
