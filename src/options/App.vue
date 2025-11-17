@@ -5,46 +5,60 @@ import CrIcon from "@/components/cr-icon.vue";
 import CrButton from "@/components/cr-button.vue";
 import UserscriptCard from "@/components/userscript-card.vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {BrowserUserScript} from "@/service_worker/user_scripts.ts";
+import {UserScript, UserScriptMeta} from "@/service_worker/user_scripts.ts";
 import userScriptTemplate from './template.userscript.js?raw'
 import CrPage from "@/components/cr-page.vue";
+import {Optional} from "@/common.ts";
+import CrToggle from "@/components/cr-toggle.vue";
 
 const editorOptions = {
   fontSize: 14,
   automaticLayout: true,
   padding: {
     top: 28,
-  }
+  },
 };
 
-const userScripts = ref<BrowserUserScript[]>();
-const editorUserScript = ref<BrowserUserScript>();
+const userScripts = ref<(UserScriptMeta & Omit<UserScript, 'code'>)[]>();
+const editorUserScript = ref<Optional<UserScript, 'id'>>();
 
 onBeforeMount(async () => {
-  const scriptUrl = new URL(location.href).searchParams.get('url');
-  if(scriptUrl) {
-    const userScript = await fetch(scriptUrl).then(async (res) => UserScripts.parse(await res.text()));
-    editorUserScript.value = Object.assign(userScript, {
-      id: new TextEncoder().encode(crypto.randomUUID()).toBase64({urlSafe: true, omitPadding: true}),
+  const queryParams = new URL(location.href).searchParams;
+  if (queryParams.get('url')) {
+    // TODO
+    const scriptUrl = queryParams.get('url')!;
+    const code = await fetch(scriptUrl).then((res) => res.text());
+    editorUserScript.value = {
       enabled: true,
-    });
+      code,
+    };
 
     const url = new URL(location.href);
     url.searchParams.delete('url');
     window.history.pushState(null, '', url.toString());
-  } else {
-    const scriptId = new URL(location.href).searchParams.get('id');
-    if (scriptId) {
-      editorUserScript.value = await UserScripts.getUserScript(scriptId);
-      console.log("userScript:", editorUserScript.value);
-    } else {
-      userScripts.value = await UserScripts.getUserScripts();
-      console.log("userScripts:", userScripts.value);
+  } else if (queryParams.get('id')) {
+    const scriptId = queryParams.get('id')!;
+    const userScript = await UserScripts.get(scriptId);
+    console.log("userScript:", userScript);
+    if (!userScript) {
+      // TODO
+      return;
     }
+    editorUserScript.value = userScript;
+
+  } else {
+    userScripts.value = (await UserScripts.getAll()).map((script) => {
+      const userScriptMeta = UserScripts.parse(script.code);
+      return {
+        ...userScriptMeta,
+        ...script,
+      }
+    });
+    console.log("userScripts:", userScripts.value);
   }
 });
 
-function editUserScript(userScript: BrowserUserScript) {
+function editUserScript(userScript: UserScript) {
   editorUserScript.value = userScript;
 
   const url = new URL(location.href);
@@ -53,45 +67,50 @@ function editUserScript(userScript: BrowserUserScript) {
 }
 
 function createUserScript() {
-  editorUserScript.value = Object.assign(UserScripts.parse(userScriptTemplate), {
-    id: new TextEncoder().encode(crypto.randomUUID()).toBase64({urlSafe: true, omitPadding: true}),
+  editorUserScript.value = {
     enabled: true,
-  });
+    code: userScriptTemplate,
+  };
 
   const url = new URL(location.href);
   url.searchParams.delete('id');
   window.history.pushState(null, '', url.toString());
 }
 
-function closeUserscript() {
+function closeUserScript() {
   const searchParams = new URLSearchParams(window.location.search);
   searchParams.delete("id");
   window.location.search = searchParams.toString();
 }
 
-function saveUserScript(userScript: BrowserUserScript) {
-  if (!userScript) {
-    throw new Error("No user script to save");
-  }
-  UserScripts.setUserScript({
-    ...userScript,
-    ...UserScripts.parse(userScript.raw),
-  }, true);
+async function saveUserScript(userScript_: Optional<UserScript, 'id'>) {
+  const userScript = await UserScripts.set(userScript_);
+  userScript_.id = userScript.id;
 
-  const url = new URL(location.href);
-  url.searchParams.set('id', userScript.id);
-  window.history.pushState(null, '', url.toString());
+  // TODO move somewhere else
+  if(editorUserScript.value){
+    const url = new URL(location.href);
+    url.searchParams.set('id', userScript.id);
+    window.history.pushState(null, '', url.toString());
+  }
 }
 
-async function removeUserScript(userScript: BrowserUserScript) {
-  await UserScripts.removeUserScript(userScript.id, true);
+async function removeUserScript(userScript: UserScript) {
+  await UserScripts.remove(userScript.id);
   if (editorUserScript.value) {
     if (editorUserScript.value.id === userScript.id) {
-      closeUserscript();
+      closeUserScript();
     }
   } else {
-    userScripts.value = await UserScripts.getUserScripts();
+    userScripts.value = userScripts.value?.filter((script) => script.id !== userScript.id);
   }
+}
+
+const sync = ref(false);
+async function toggleSync() {
+  chrome.identity.getAuthToken({ 'interactive': true }, function (token) {
+    console.log(token);
+  });
 }
 </script>
 
@@ -102,6 +121,7 @@ async function removeUserScript(userScript: BrowserUserScript) {
     width: 1em;
     font-size: 24px;"/>
     <div id="title">User Scripts</div>
+    <cr-toggle id="state-toggle" label="Sync" @click="toggleSync()" v-model="sync"></cr-toggle>
   </div>
 
   <div id="navbar">
@@ -110,14 +130,14 @@ async function removeUserScript(userScript: BrowserUserScript) {
 
   <cr-page v-if="editorUserScript" id="edit-page">
     <div id="edit-page-actions">
-      <cr-button :circle="true" :border="false" @click="closeUserscript()">
+      <cr-button :circle="true" :border="false" @click="closeUserScript()">
         <cr-icon name="arrow_back"/>
       </cr-button>
       <cr-button @click="saveUserScript(editorUserScript)">Save</cr-button>
     </div>
     <CodeEditor
         id="editor"
-        v-model:value="editorUserScript.raw"
+        v-model:value="editorUserScript.code"
         language="javascript"
         theme="vs-dark"
         :options="editorOptions"

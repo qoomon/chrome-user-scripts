@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import {defineProps} from 'vue';
-
-const props = defineProps({
+defineProps({
   name: {
     type: String,
     required: true,
@@ -11,7 +9,7 @@ const props = defineProps({
 
 <template>
 <span class="material-symbols-outlined">
-    {{ props.name }}
+    {{ name }}
 </span>
 </template>
 

@@ -3,6 +3,7 @@ import pkg from './package.json'
 
 export default defineManifest({
     manifest_version: 3,
+    key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA84apGKSVEmfI/Q2v51v8NBc6MwoTlfbqPEsk0vZnNP299ShDonB4AXnErH2LSOzzxyxrn0braR5p8S9h1yNb0NYMPO90FWOb4A8sM5jNi0DtpBQqQDtMI/n630MSnIpY6TVeA/7Ce+MAd39Sp9kCo7bhlZNmZJC2WZu673IygD5tdhmZQkrVeA5/8mPk94SnJHzBJDLc2ZNATGb2O17b8zcf8MvxaNBB/mheoXLbjRKkW9fkdGw2nob6XKscjUFY4E0kcreyi64cn9Hncph0OW4Qtx0VrbkuOZCAx4l8oMUlcHxdXsEYrOUvoSxcP/ek/LVwv5ShWlx7RWHzSHgh7QIDAQAB",
     name: 'User Scripts',
     description: "User scripts manager",
     version: pkg.version,
@@ -27,12 +28,20 @@ export default defineManifest({
     },
     incognito: 'split',
     permissions: [
-        'storage',
         'userScripts',
         'activeTab',
+        'storage',
+        'unlimitedStorage',
+        'identity',
         'webRequest',
     ],
     host_permissions: [
         "<all_urls>"
     ],
+    oauth2: {
+        client_id: "289450459678-g29onfh4s94210jg5unp2ik4a13mt1pb.apps.googleusercontent.com",
+        scopes: [
+            "https://www.googleapis.com/auth/drive.appdata"
+        ]
+    },
 })

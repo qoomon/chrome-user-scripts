@@ -1,6 +1,6 @@
 <script setup lang="ts">
 
-const props = defineProps({
+defineProps({
   circle: {
     type: Boolean,
     default: false,
@@ -14,8 +14,8 @@ const props = defineProps({
 
 <template>
   <div class="cr-button" :class="{
-    'cr-button-circle': props.circle,
-    'cr-button-border': props.border
+    'cr-button-circle': circle,
+    'cr-button-border': border
   }" tabindex="0">
     <slot></slot>
   </div>

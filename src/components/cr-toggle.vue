@@ -2,7 +2,7 @@
 import {defineModel} from "vue";
 
 const checked = defineModel({type: Boolean, required: true});
-const props = defineProps({
+defineProps({
   label: {
     type: String,
   },
@@ -15,7 +15,7 @@ const toggle = () => {
 
 <template>
   <div id="toggle">
-    <div v-if="props.label">{{ props.label }}</div>
+    <div v-if="label">{{ label }}</div>
     <div @click="toggle" class="bar" :class="{ 'checked': checked }">
       <div class="knob"></div>
     </div>
