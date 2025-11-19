@@ -1,6 +1,8 @@
 import * as UserScripts from "@/service_worker/user_scripts.ts";
 
+UserScripts.load(); // TODO
 chrome.runtime.onStartup.addListener(() => {
+    console.log('Service worker onStartup...');
     UserScripts.load();
 })
 

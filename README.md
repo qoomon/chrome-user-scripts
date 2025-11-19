@@ -5,7 +5,7 @@
 This is a Chrome extension that allows you to manage and run user scripts directly in your browser. 
 It provides an easy-to-use interface for installing, organizing, and executing custom scripts to enhance your browsing experience.
 
-[Privacy Policy](application_privacy_policy.md) | [Terms of Service](application_terms_of_service.md)
+[Privacy Policy](application_privacy_policy) | [Terms of Service](application_terms_of_service)
 
 # Development
 
@@ -43,5 +43,14 @@ It provides an easy-to-use interface for installing, organizing, and executing c
 - [CRXJS Documentation](https://crxjs.dev/vite-plugin)
 
 ## TODO's
-- https://developers.google.com/workspace/drive/api/guides/appdata#node.js
 - extension id: ihgmdcaijidjdmngpnbdkdefhocmkdhc
+- delete extension dta in google drive https://drive.google.com/drive/settings
+- https://console.cloud.google.com/auth/overview?project=chrome-user-scripts
+
+logout
+```js
+await chrome.identity.removeCachedAuthToken({token: await chrome.identity.getAuthToken({
+        interactive: true,
+        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+    }).then(res=>res.token)})
+```

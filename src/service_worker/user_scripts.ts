@@ -1,44 +1,91 @@
 import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
 import RunAt = chrome.extensionTypes.RunAt;
 import StorageChange = chrome.storage.StorageChange;
-import LZString from "lz-string";
-import {Optional} from "@/common.ts";
+import StorageArea = chrome.storage.StorageArea;
 
 const storageNamespaceSeparator = '::';
 const userScriptStorageNamespace = 'userscripts';
-const userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
+const userScriptMetaStorageNamespace = 'userscripts-meta';
+let userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
+let userScriptMetaStorageKeyPrefix = userScriptMetaStorageNamespace + storageNamespaceSeparator;
+const userScriptStorageKey = (scriptId: string) => userScriptStorageKeyPrefix + scriptId;
+const userScriptStorageMetaKey = (scriptId: string) => userScriptMetaStorageKeyPrefix + scriptId;
+
 const extensionInstanceId = crypto.randomUUID()
 
+export type ChromeUserScript = {
+    id: string;
+    code: string;
+    enabled: boolean;
+}
+
+export type ChromeUserScriptMetaLocal = {
+    id: string,
+    hash: string,
+    meta: UserScriptMeta,
+    enabled: boolean,
+    synced?: boolean,
+}
+
+type ChromeUserScriptMetaSync = {
+    id: string,
+    hash: string,
+    enabled: boolean,
+    fileId: string,
+}
+
+export type UserScript = {
+    meta: UserScriptMeta;
+    code: string;
+}
+
+export type UserScriptMeta = {
+    name: string;
+    namespace?: string;
+    version?: string;
+    icon?: string;
+    description?: string;
+    author?: string;
+    'run-at'?: string;
+    match?: string[];
+}
+
 export async function load() {
-    // clear all registered user script
-    await chrome.userScripts.unregister();
-    for (const userscript of await storageSyncGetUserScripts()) {
-        await set(userscript, false);
+    console.log('loading user scripts...');
+    for (const meta of await getAll()) {
+        console.log('loading user script:', meta.id);
+        const code = await getStorageItem<string>(
+            chrome.storage.local, userScriptStorageKey(meta.id));
+        const registeredUserScript = buildRegisteredUserScript(meta.id, code!);
+        console.log('registering user script:', meta.id);
+        await chrome.userScripts.register([registeredUserScript]);
     }
 
     // --- storage
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName === 'sync') {
-            for (const [_, change] of Object.entries(changes)) {
-                if (isOriginatedByExtensionInstance(change)) {
-                    continue;
-                }
+        (async () => {
+            if (areaName === 'sync') {
+                for (const [_, change] of Object.entries(changes)) {
+                    if (isLocalSyncStorageChange(change)) {
+                        continue;
+                    }
 
-                if (change.newValue) {
-                    const newUserScript = decodeStorageEntry<UserScript>(change.newValue);
-                    set(newUserScript, false);
-                } else {
-                    const oldUserScript = decodeStorageEntry<UserScript>(change.oldValue);
-                    remove(oldUserScript.id, false)
+                    if (change.newValue) {
+                        const newUserScriptMetaSync = unwrapSyncStorageEntry<ChromeUserScriptMetaSync>(change.newValue);
+                        await set({
+                            id: newUserScriptMetaSync.id,
+                            // TODO only download if hash differs from local storage
+                            code: await downloadFromGoogleDrive(newUserScriptMetaSync.fileId),
+                            enabled: newUserScriptMetaSync.enabled,
+                        }, false);
+                    } else {
+                        const oldUserScriptMetaSync = unwrapSyncStorageEntry<ChromeUserScriptMetaSync>(change.oldValue);
+                        await remove(oldUserScriptMetaSync.id, false)
+                    }
                 }
             }
-        }
-
-        function isOriginatedByExtensionInstance(change: StorageChange) {
-            return change.newValue?.origin === extensionInstanceId
-                || (!change.newValue && change.oldValue?.origin === extensionInstanceId);
-        }
+        })();
     });
 
     // --- tabs
@@ -70,60 +117,163 @@ export async function load() {
     });
 }
 
-export async function set(userScript_: Optional<UserScript, 'id'>, store = true): Promise<UserScript> {
-    const userScript = {
-        ...userScript_,
-        id: userScript_.id ?? crypto.randomUUID(),
-    };
-
-    if (store) {
-        await storageSyncSetUserScript(userScript);
+export async function set(userScript: Partial<ChromeUserScript>, sync = true): Promise<ChromeUserScriptMetaLocal> {
+    if (!userScript.id && !userScript.code) {
+        throw new Error('Either id or code must be provided to create or update a user script.');
     }
 
-    const userScriptExists = await chrome.userScripts.getScripts({ids: [userScript.id]})
-        .then(scripts => !!scripts[0]);
+    const isNewUserScript = !userScript.id;
+    const userScriptHash = userScript.code ? await calculateHash(userScript.code) : null;
 
-    if (userScript.enabled) {
-        const registeredUserScript = buildRegisteredUserScript(userScript);
-        if (userScriptExists) {
-            await chrome.userScripts.update([registeredUserScript]);
-        } else {
-            await chrome.userScripts.register([registeredUserScript]);
+    const userScriptMetaLocal: ChromeUserScriptMetaLocal = isNewUserScript
+        ? {
+            id: crypto.randomUUID(),
+            hash: userScriptHash!,
+            meta: parse(userScript.code!).meta,
+            enabled: userScript.enabled ?? true,
+            synced: false,
+        } : (await getStorageItem(chrome.storage.local, userScriptStorageMetaKey(userScript.id!))
+            ?? _throw(new Error('User script meta not found for id: ' + userScript.id)));
+
+    const userScriptCodeChanged = isNewUserScript || (userScriptHash !== null && userScriptHash !== userScriptMetaLocal.hash);
+
+    if (!userScript.id) {
+        userScript.id = userScriptMetaLocal.id;
+    }
+
+    if (userScript.code !== undefined) {
+        if (userScriptCodeChanged) {
+            await setStorageItem<string>(chrome.storage.local,
+                userScriptStorageKey(userScriptMetaLocal.id), userScript.code);
+            userScriptMetaLocal.hash = userScriptHash!;
+            userScriptMetaLocal.meta = parse(userScript.code).meta;
+        }
+    }
+
+    if (userScript.enabled !== undefined) {
+        userScriptMetaLocal.enabled = userScript.enabled;
+    }
+
+    // TODO refactor
+    if (sync) {
+        userScriptMetaLocal.synced = false
+    }
+
+    await setStorageItem<ChromeUserScriptMetaLocal>(chrome.storage.local,
+        userScriptStorageMetaKey(userScriptMetaLocal.id), userScriptMetaLocal);
+
+    const userScriptIsRegistered = await userScriptsHasScript(userScriptMetaLocal.id);
+    if (userScript.enabled === true) {
+        if (userScriptCodeChanged) {
+            const registeredUserScript = buildRegisteredUserScript(userScriptMetaLocal.id, userScript.code!);
+            if (userScriptIsRegistered) {
+                console.log('updating user script:', userScriptMetaLocal.id);
+                await chrome.userScripts.update([registeredUserScript]);
+            } else {
+                console.log('registering user script:', userScriptMetaLocal.id);
+                await chrome.userScripts.register([registeredUserScript]);
+            }
         }
     } else {
-        if (userScriptExists) {
-            await chrome.userScripts.unregister({ids: [userScript.id]});
+        if (userScriptIsRegistered) {
+            await chrome.userScripts.unregister({ids: [userScriptMetaLocal.id]});
         }
     }
 
+    if (userScriptMetaLocal.synced === false) {
+        // TODO handle offline case
+        let userScriptMetaSync = await getStorageItem<ChromeUserScriptMetaSync>(
+            chrome.storage.sync, userScriptStorageMetaKey(userScriptMetaLocal.id));
+        if (!userScriptMetaSync) {
+            const fileId = await uploadToGoogleDrive({
+                fileName: userScriptMetaLocal.id + '.user.js',
+                fileContent: userScript.code ?? '',
+            });
+            userScriptMetaSync = {
+                id: userScriptMetaLocal.id,
+                hash: userScriptMetaLocal.hash,
+                enabled: userScriptMetaLocal.enabled,
+                fileId,
+            }
+        } else if (userScriptCodeChanged) {
+            await uploadToGoogleDrive({
+                fileId: userScriptMetaSync.fileId,
+                fileContent: userScript.code ?? '',
+            });
+            userScriptMetaSync.hash = userScriptHash!;
+        }
 
-    return userScript
+
+        if (userScript.enabled !== undefined) {
+            userScriptMetaSync.enabled = userScript.enabled;
+        }
+        console.log('userScriptMetaSync', userScriptMetaSync);
+        await setStorageItem<ChromeUserScriptMetaSync>(chrome.storage.sync,
+            userScriptStorageMetaKey(userScriptMetaSync.id), userScriptMetaSync);
+
+        userScriptMetaLocal.synced = true;
+        await setStorageItem<ChromeUserScriptMetaLocal>(chrome.storage.local,
+            userScriptStorageMetaKey(userScriptMetaLocal.id), userScriptMetaLocal);
+    }
+
+
+    return userScriptMetaLocal
 }
 
-export async function remove(id: string, store = true): Promise<void> {
-    if (store) {
-        await chrome.storage.sync.remove(id);
+export async function get(id: string): Promise<ChromeUserScriptMetaLocal & ChromeUserScript> {
+    const meta = await getStorageItem<ChromeUserScriptMetaLocal>(chrome.storage.local, userScriptStorageMetaKey(id))
+        ?? _throw(new Error(`User script does not exist. id: ${id}`));
+    const code = await getStorageItem<string>(chrome.storage.local, userScriptStorageKey(id))
+        ?? _throw(new Error(`User script code does not exist. id: ${id}`));
+    return {
+        ...meta,
+        code,
+    };
+}
+
+export async function getAll(): Promise<ChromeUserScriptMetaLocal[]> {
+    return await chrome.storage.local.get().then((entries) => {
+        return Object.entries(entries)
+            .filter(([key]) => key.startsWith(userScriptMetaStorageKeyPrefix))
+            .map(([_, value]) => value);
+    });
+}
+
+export async function remove(id: string, sync = true): Promise<void> {
+    if (sync) {
+        const userScriptMetaSync = await getStorageItem<ChromeUserScriptMetaSync>(
+                chrome.storage.sync, userScriptStorageMetaKey(id))
+            ?? _throw(new Error(`User script does not exist. id: ${id}`));
+        console.log('deleting from google drive:', userScriptMetaSync.id);
+        await deleteFromGoogleDrive(userScriptMetaSync.fileId);
+        console.log('deleting from sync storage:', id);
+        await chrome.storage.sync.remove(userScriptStorageMetaKey(id));
     }
+    console.log('deleting from local storage:', id);
+    await chrome.storage.local.remove(userScriptStorageMetaKey(id));
+    await chrome.storage.local.remove(userScriptStorageKey(id));
+    console.log('unregistering user script:', id);
     await chrome.userScripts.unregister({ids: [id]});
 }
 
-function buildRegisteredUserScript(userScript: UserScript): RegisteredUserScript {
-    const userScriptMeta = parse(userScript.code);
+function buildRegisteredUserScript(id: string, code: string): RegisteredUserScript {
+    const userScript = parse(code);
     return {
-        id: userScript.id,
-        matches: userScriptMeta.match,
-        runAt: userScriptMeta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
+        id,
+        matches: userScript.meta.match,
+        runAt: userScript.meta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
         world: "USER_SCRIPT", // "MAIN" | "USER_SCRIPT",
         js: [
             {
                 code: functionCallAsString(
                     (userScriptId: string) => chrome.runtime.sendMessage({
                         event: 'USER_SCRIPT_INJECTED', userScriptId,
-                    }), userScript.id,
+                    }),
+                    id,
                 )
             },
             {
-                code: userScriptMeta.code,
+                code: userScript.code,
             },
         ],
     };
@@ -133,15 +283,8 @@ function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<t
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
 }
 
-export async function getAll() {
-    return await storageSyncGetUserScripts()
-}
 
-export async function get(id: string) {
-    return await storageSyncGetUserScript(id);
-}
-
-export function parse(userScriptRaw: string): UserScriptMeta {
+export function parse(userScriptRaw: string): UserScript {
     const userScriptRegexp = /\B\/\/ ==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/ ==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
     const userScriptMatch = userScriptRaw?.match(userScriptRegexp)
     if (!userScriptMatch?.groups) {
@@ -172,37 +315,22 @@ export function parse(userScriptRaw: string): UserScriptMeta {
      */
 
     return {
-        name: metaTags.name[0],
-        namespace: metaTags.namespace?.[0],
-        version: metaTags.version?.[0],
-        icon: metaTags.icon?.[0],
-        description: metaTags.description?.[0],
-        author: metaTags.author?.[0],
-        'run-at': metaTags['run-at']?.[0],
-        match: metaTags.match,
+        meta: {
+            name: metaTags.name[0],
+            namespace: metaTags.namespace?.[0],
+            version: metaTags.version?.[0],
+            icon: metaTags.icon?.[0],
+            description: metaTags.description?.[0],
+            author: metaTags.author?.[0],
+            'run-at': metaTags['run-at']?.[0],
+            match: metaTags.match,
+        },
         code,
     };
 }
 
-export type UserScript = {
-    id: string;
-    enabled: boolean;
-    code: string;
-}
 
-export type UserScriptMeta = {
-    name: string;
-    namespace?: string;
-    version?: string;
-    icon?: string;
-    description?: string;
-    author?: string;
-    'run-at'?: string;
-    match?: string[];
-    code: string;
-}
-
-type StorageEntry = {
+type SyncStorageEntry = {
     origin: string,
     payload: any,
 }
@@ -226,82 +354,185 @@ export function determineIcon(userScriptMeta: UserScriptMeta): string | undefine
 
 // ----- Synced Storage ----------
 
-async function storageSyncSetUserScript(userScript: UserScript) {
-    const entry = encodeStorageEntry(userScript);
-    const entryKey = userScriptStorageKeyPrefix + userScript.id;
-    return await chrome.storage.sync.set({[entryKey]: entry});
-}
 
-async function storageSyncGetUserScripts() {
-    return await chrome.storage.sync.get().then((entries) => {
-        return Object.entries(entries)
-            .filter(([key]) => key.startsWith(userScriptStorageKeyPrefix))
-            .map(([_, value]) => decodeStorageEntry<UserScript>(value));
-    });
-}
-
-async function storageSyncGetUserScript(id: string) {
-    const key = userScriptStorageKeyPrefix + id;
-    return await chrome.storage.sync.get(key)
-        .then((data) => data?.[key])
-        .then((value) => value ? decodeStorageEntry<UserScript>(value) : null);
-}
-
-
-function encodeStorageEntry(payload: any): StorageEntry {
+function wrapSyncStorageEntry(payload: any): SyncStorageEntry {
     return {
         origin: extensionInstanceId,
-        payload: LZString.compressToBase64(JSON.stringify(payload)),
+        payload,
     }
 }
 
-function decodeStorageEntry<T>(entry: StorageEntry): T {
-    return JSON.parse(LZString.decompressFromBase64(entry.payload)) as T;
+function unwrapSyncStorageEntry<T>(entry: SyncStorageEntry): T {
+    return entry.payload as T;
 }
 
-async function getAuthToken() {
-    return new Promise((resolve, reject) => {
-        chrome.identity.getAuthToken({interactive: true}, (token) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else {
-                resolve(token);
+function isLocalSyncStorageChange(change: StorageChange) {
+    return (change.newValue as SyncStorageEntry)?.origin === extensionInstanceId
+        || (!change.newValue && (change.oldValue as SyncStorageEntry)?.origin === extensionInstanceId);
+}
+
+/**
+ * --- ON STARTUP
+ * load all userscripts from sync storage
+ *  for each userscript
+ *   check if local storage code is up to date
+ *    if not
+ *      get code from google drive
+ *      store to local storage (id, code)
+ *   register user script
+ *   remove local storage entries (uploaded=true) not in sync storage
+ *   upload local storage entries (uploaded=false) to google drive
+ *    store to sync storage (id, enabled, google drive file id)
+ *
+ * register storage sync change listener
+ *  if newValue
+ *   get code from google drive
+ *   store to local storage (id, enabled, code)
+ *   register user script
+ *  else
+ *    remove from local storage
+ *    unregister user script
+ */
+
+
+async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
+    fileId?: string,
+    fileName?: string;
+    fileContent: string,
+}) {
+    // TODO handle disconnected(removed from account) oauth app
+    const accessToken = await chrome.identity.getAuthToken({
+        interactive: true,
+        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+    });
+
+    if (!fileId) {
+        const form = new FormData();
+        form.append('metadata', new Blob(
+            [JSON.stringify({
+                name: fileName,
+                mimeType: 'text/plain',
+                parents: ['appDataFolder'],
+            })],
+            {type: 'application/json'},
+        ));
+        form.append('file', new Blob([fileContent], {type: 'text/plain'}));
+
+        return await fetch(
+            'https://www.googleapis.com/upload/drive/v3/files' + (fileId ? `/${fileId}` : '')
+            + '?uploadType=multipart&fields=id',
+            {
+                method: !fileId ? 'POST' : 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${accessToken.token}`,
+                },
+                body: form,
+            })
+            .then(async (res) => {
+                if (!res.ok) {
+                    throw new Error(`Failed to upload file ${fileId}: ${res.status} ${res.statusText}`
+                        + await res.text());
+                }
+                return await res.json().then((res) => res.id);
+            });
+    } else {
+        await fetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+            {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${accessToken.token}`,
+                    'Content-Type': 'text/plain',
+                    'Content-Length': fileContent.length.toString(),
+                },
+                body: new Blob([fileContent], {type: 'text/plain'}),
+            }
+        );
+        return fileId;
+    }
+
+
+}
+
+async function downloadFromGoogleDrive(fileId: string) {
+    const accessToken = await chrome.identity.getAuthToken({
+        interactive: true,
+        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+    });
+    return await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken.token}`,
+            },
+        })
+        .then(async (res) => {
+            if (!res.ok) {
+                throw new Error(`Failed to download file ${fileId}: ${res.status} ${res.statusText}\n`
+                    + await res.text());
+            }
+            return await res.text();
+        });
+}
+
+async function deleteFromGoogleDrive(fileId: string) {
+    const accessToken = await chrome.identity.getAuthToken({
+        interactive: true,
+        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+    });
+    return await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}`,
+        {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${accessToken.token}`,
+            },
+        })
+        .then(async (res) => {
+            if (!res.ok) {
+                throw new Error(`Failed to delete file ${fileId}: ${res.status} ${res.statusText}\n`
+                    + await res.text());
             }
         });
-    });
 }
 
-async function saveUserScript(userScript: UserScript) {
-    const token = await getAuthToken();
-    const metadata = {
-        name: userScript.id + '.user.js',
-        mimeType: 'application/json',
-        // Key: This is how you target the Application Data Folder
-        parents: ['appDataFolder']
-    };
-    const content = JSON.stringify(userScript);
-    try {
-        const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-            method: 'POST', // Use POST for create, PATCH for update
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json' // Assuming you're uploading metadata + content
-            },
-            // In a real implementation, you'd use a multipart body for metadata and content.
-            // For a simple JSON config, you can look for the simpler files.update endpoint
-            // after the first time the file is created and you have its ID.
-            body: JSON.stringify({
-                ...metadata,
-                content: content // Simplistic model, real API requires multipart or content stream
-            })
-        });
-
-        // In a production-ready system, you would first search for the file
-        // to get its ID, and if found, use the PATCH method to update it.
-        console.log('Config saved to Drive:', await response.json());
-    } catch (error) {
-        console.error('Drive save error:', error);
+async function calculateHash(content: string): Promise<string> {
+    if (content === undefined) {
+        throw new Error('Content is undefined');
     }
+    return await crypto.subtle.digest('SHA-256',
+        new TextEncoder().encode(content))
+        .then((buffer => new Uint8Array(buffer).toBase64({urlSafe: false, omitPadding: false})))
 }
 
+async function getStorageItem<T>(storage: StorageArea, key: string): Promise<T | undefined> {
+    return storage.get(key)
+        .then((data) => data?.[key])
+        .then((value) => {
+            if (storage === chrome.storage.sync && value) {
+                return unwrapSyncStorageEntry<T>(value);
+            }
+            return value as T | undefined;
+        })
+}
 
+async function setStorageItem<T>(storage: StorageArea, key: string, value: T): Promise<void> {
+    if (storage === chrome.storage.sync) {
+        value = wrapSyncStorageEntry(value) as unknown as T;
+    }
+
+    return storage.set({[key]: value});
+}
+
+async function userScriptsGetScript(id: string) {
+    return chrome.userScripts.getScripts({ids: [id]}).then((scrips) => scrips[0]);
+}
+
+async function userScriptsHasScript(id: string) {
+    return userScriptsGetScript(id).then((script) => !!script);
+}
+
+function _throw(error: any): never {
+    throw error;
+}

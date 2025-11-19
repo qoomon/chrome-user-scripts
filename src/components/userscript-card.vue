@@ -5,13 +5,13 @@ import CrToggle from "@/components/cr-toggle.vue";
 
 import {PropType} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {UserScript, UserScriptMeta} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
 
 defineEmits(['edit', 'remove', 'state-change']);
 
 defineProps({
   userScript: {
-    type: Object as PropType<UserScriptMeta & Omit<UserScript, 'code'>>,
+    type: Object as PropType<ChromeUserScriptMetaLocal>,
     required: true,
   },
 });
@@ -19,16 +19,16 @@ defineProps({
 </script>
 
 <template>
-  <cr-card id="card">
+  <cr-card class="card">
     <div id="main">
-      <img id="icon" alt="icon" :src="userScript.icon ?? UserScripts.determineIcon(userScript) ?? '' "
+      <img id="icon" alt="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript.meta) ?? '' "
            @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
       <div>
         <div id="headline">
-          <div id="name">{{ userScript.name }}</div>
-          <div id="version">{{ userScript.version }}</div>
+          <div id="name">{{ userScript.meta.name }}</div>
+          <div id="version">{{ userScript.meta.version }}</div>
         </div>
-        <div id="description">{{ userScript.description }}</div>
+        <div id="description">{{ userScript.meta.description }}</div>
       </div>
     </div>
     <div id="buttons">
@@ -42,7 +42,7 @@ defineProps({
 <style scoped>
 @import "@/components/cr-style.css";
 
-#card {
+.card {
   font-size: 13px;
   width: 400px;
 }
@@ -90,8 +90,7 @@ defineProps({
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 8px;
-  padding-right: 20px;
+  padding: 8px 20px 8px 8px;
 }
 
 #state-toggle {

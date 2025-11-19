@@ -5,11 +5,10 @@ import CrIcon from "@/components/cr-icon.vue";
 import CrButton from "@/components/cr-button.vue";
 import UserscriptCard from "@/components/userscript-card.vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {UserScript, UserScriptMeta} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScript, ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
 import userScriptTemplate from './template.userscript.js?raw'
 import CrPage from "@/components/cr-page.vue";
 import {Optional} from "@/common.ts";
-import CrToggle from "@/components/cr-toggle.vue";
 
 const editorOptions = {
   fontSize: 14,
@@ -19,8 +18,8 @@ const editorOptions = {
   },
 };
 
-const userScripts = ref<(UserScriptMeta & Omit<UserScript, 'code'>)[]>();
-const editorUserScript = ref<Optional<UserScript, 'id'>>();
+const userScripts = ref<(ChromeUserScriptMetaLocal)[]>();
+const editorUserScript = ref<Optional<ChromeUserScript, 'id'>>();
 
 onBeforeMount(async () => {
   const queryParams = new URL(location.href).searchParams;
@@ -47,22 +46,16 @@ onBeforeMount(async () => {
     editorUserScript.value = userScript;
 
   } else {
-    userScripts.value = (await UserScripts.getAll()).map((script) => {
-      const userScriptMeta = UserScripts.parse(script.code);
-      return {
-        ...userScriptMeta,
-        ...script,
-      }
-    });
+    userScripts.value = await UserScripts.getAll();
     console.log("userScripts:", userScripts.value);
   }
 });
 
-function editUserScript(userScript: UserScript) {
-  editorUserScript.value = userScript;
+async function editUserScript(id: string) {
+  editorUserScript.value = await UserScripts.get(id);
 
   const url = new URL(location.href);
-  url.searchParams.set('id', userScript.id);
+  url.searchParams.set('id', id);
   window.history.pushState(null, '', url.toString());
 }
 
@@ -83,34 +76,26 @@ function closeUserScript() {
   window.location.search = searchParams.toString();
 }
 
-async function saveUserScript(userScript_: Optional<UserScript, 'id'>) {
-  const userScript = await UserScripts.set(userScript_);
-  userScript_.id = userScript.id;
+async function saveUserScript(userScript: Partial<ChromeUserScript>) {
+  userScript = await UserScripts.set(userScript);
 
   // TODO move somewhere else
-  if(editorUserScript.value){
+  if (editorUserScript.value) {
     const url = new URL(location.href);
-    url.searchParams.set('id', userScript.id);
+    url.searchParams.set('id', userScript.id!);
     window.history.pushState(null, '', url.toString());
   }
 }
 
-async function removeUserScript(userScript: UserScript) {
-  await UserScripts.remove(userScript.id);
+async function removeUserScript(id: string) {
+  await UserScripts.remove(id);
   if (editorUserScript.value) {
-    if (editorUserScript.value.id === userScript.id) {
+    if (editorUserScript.value.id === id) {
       closeUserScript();
     }
   } else {
-    userScripts.value = userScripts.value?.filter((script) => script.id !== userScript.id);
+    userScripts.value = userScripts.value?.filter((script) => script.id !== id);
   }
-}
-
-const sync = ref(false);
-async function toggleSync() {
-  chrome.identity.getAuthToken({ 'interactive': true }, function (token) {
-    console.log(token);
-  });
 }
 </script>
 
@@ -121,7 +106,6 @@ async function toggleSync() {
     width: 1em;
     font-size: 24px;"/>
     <div id="title">User Scripts</div>
-    <cr-toggle id="state-toggle" label="Sync" @click="toggleSync()" v-model="sync"></cr-toggle>
   </div>
 
   <div id="navbar">
@@ -149,9 +133,9 @@ async function toggleSync() {
     <div id="user-scripts">
       <userscript-card v-for="userScript in userScripts" :key="userScript.id"
                        :user-script="userScript"
-                       @edit="editUserScript(userScript)"
+                       @edit="editUserScript(userScript.id)"
                        @state-change="saveUserScript(userScript)"
-                       @remove="removeUserScript(userScript)"
+                       @remove="removeUserScript(userScript.id)"
       />
     </div>
   </div>

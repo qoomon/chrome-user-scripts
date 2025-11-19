@@ -14,7 +14,7 @@ const toggle = () => {
 </script>
 
 <template>
-  <div id="toggle">
+  <div class="toggle">
     <div v-if="label">{{ label }}</div>
     <div @click="toggle" class="bar" :class="{ 'checked': checked }">
       <div class="knob"></div>
@@ -42,7 +42,7 @@ const toggle = () => {
   --cr-toggle-knob-position-end_: calc(var(--cr-toggle-knob-position-center_) + var(--cr-toggle-knob-direction_) * var(--cr-toggle-knob-travel-distance_));
 }
 
-#toggle {
+.toggle {
   display: flex;
   gap: 12px;
   align-items: center;

@@ -1,23 +1,17 @@
 <script setup lang="ts">
 import CrIcon from "@/components/cr-icon.vue";
-import {onBeforeMount, ref} from "vue";
+import {onMounted, ref} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
+import {ChromeUserScript, ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
 import CrToggle from "@/components/cr-toggle.vue";
-import {UserScript, UserScriptMeta} from "@/service_worker/user_scripts.ts";
 
-const userScripts = ref<(UserScriptMeta & Omit<UserScript, 'code'>)[]>();
+const userScripts = ref<ChromeUserScriptMetaLocal[]>([]);
 
-onBeforeMount(async () => {
+onMounted(async () => {
   // TODO display tab scripts only
   // const currentTabId = await chrome.tabs.query({active: true, currentWindow: true})
   //     .then(tabs => tabs[0]?.id ?? null);
-  userScripts.value = (await UserScripts.getAll()).map((script) => {
-    const userScriptMeta = UserScripts.parse(script.code);
-    return {
-      ...userScriptMeta,
-      ...script,
-    }
-  });
+  userScripts.value = await UserScripts.getAll();
   console.log("userScripts:", userScripts.value);
 });
 
@@ -29,7 +23,7 @@ function closePopup() {
   window.close();
 }
 
-function saveUserScript(userScript: UserScript) {
+function saveUserScript(userScript: Partial<ChromeUserScript>) {
   if (!userScript) {
     throw new Error("No user script to save");
   }
@@ -41,17 +35,16 @@ function saveUserScript(userScript: UserScript) {
   <div id="popup">
     <header>
       <div>User Scripts</div>
-      <cr-icon id="close-button" name="close"
-               @click="closePopup()"/>
+      <cr-icon id="close-button" name="close" @click="closePopup()"/>
     </header>
 
     <div id="user-scripts">
       <div class="user-script" v-for="userScript in userScripts" :key="userScript.id">
-        <img id="icon" :src="userScript.icon ?? UserScripts.determineIcon(userScript) ?? '' "
-        @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
-        <div>{{ userScript.name }}</div>
-        <cr-toggle v-model="userScript.enabled" style="margin-left: auto;"
-        @click="saveUserScript(userScript)"/>
+        <img id="icon" alt="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript.meta) ?? '' "
+             @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
+        <div>{{ userScript.meta.name }}</div>
+        <cr-toggle v-model="userScript.enabled"
+                   @click="saveUserScript(userScript)" style="margin-left: auto;"/>
       </div>
     </div>
 
