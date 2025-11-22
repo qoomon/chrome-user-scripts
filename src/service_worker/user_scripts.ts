@@ -1,7 +1,7 @@
 import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
-import RunAt = chrome.extensionTypes.RunAt;
 import StorageChange = chrome.storage.StorageChange;
 import StorageArea = chrome.storage.StorageArea;
+import RunAt = chrome.extensionTypes.RunAt;
 
 const storageNamespaceSeparator = '::';
 const userScriptStorageNamespace = 'userscripts';
@@ -46,19 +46,25 @@ export type UserScriptMeta = {
     icon?: string;
     description?: string;
     author?: string;
-    'run-at'?: string;
-    match?: string[];
+    runAt?: string;
+    matches?: string[];
+    excludeMatches?: string[];
+    requires?: string[];
+    noFrames?: boolean;
+    world?: string;
 }
 
 export async function load() {
     console.log('loading user scripts...');
     for (const meta of await getAll()) {
-        console.log('loading user script:', meta.id);
-        const code = await getStorageItem<string>(
-            chrome.storage.local, userScriptStorageKey(meta.id));
-        const registeredUserScript = buildRegisteredUserScript(meta.id, code!);
-        console.log('registering user script:', meta.id);
-        await chrome.userScripts.register([registeredUserScript]);
+        if (meta.enabled) {
+            console.log('loading user script:', meta.id);
+            const code = await getStorageItem<string>(
+                chrome.storage.local, userScriptStorageKey(meta.id));
+            const registeredUserScript = buildRegisteredUserScript(meta.id, code!);
+            console.log('registering user script:', meta.id);
+            await chrome.userScripts.register([registeredUserScript]);
+        }
     }
 
     // --- storage
@@ -103,8 +109,12 @@ export async function load() {
     });
 
     // --- messages
+
     await chrome.userScripts.configureWorld({messaging: true});
 
+    await chrome.userScripts.configureWorld({
+        messaging: true,
+    })
     chrome.runtime.onUserScriptMessage.addListener((message, sender) => {
         const tabId = sender.tab?.id;
         if (!tabId) return;
@@ -253,29 +263,50 @@ export async function remove(id: string, sync = true): Promise<void> {
     await chrome.storage.local.remove(userScriptStorageMetaKey(id));
     await chrome.storage.local.remove(userScriptStorageKey(id));
     console.log('unregistering user script:', id);
-    await chrome.userScripts.unregister({ids: [id]});
+    const userScriptIsRegistered = await userScriptsHasScript(id);
+    if (userScriptIsRegistered) {
+        await chrome.userScripts.unregister({ids: [id]});
+    }
 }
 
 function buildRegisteredUserScript(id: string, code: string): RegisteredUserScript {
     const userScript = parse(code);
+
+    const runAt = userScript.meta.runAt
+        ?.replace('-', '_')?.toLowerCase() as RunAt | undefined;
+    if (runAt && !['document_start', 'document_end', 'document_idle', 'context_idle'].includes(runAt)) {
+        throw new Error('Unexpected value for @run-at valid values are document_start, document_end, document_idle, context_idle, but got: ' + runAt);
+    }
+
+    const world = userScript.meta.world
+        ?.replace('-', '_')?.toUpperCase() as 'USER_SCRIPT' | 'MAIN' | undefined;
+    if (world && world !== 'USER_SCRIPT' && world !== 'MAIN') {
+        throw new Error('Unexpected value for @run-at valid values are user_script or main, but got: ' + world);
+    }
+
+    const codeToInject = [];
+    // Notify service worker that the user script has been injected
+    codeToInject.push(functionCallAsString((id: string) => chrome.runtime.sendMessage({
+        event: 'USER_SCRIPT_INJECTED', id,
+    }), id));
+
+    if (userScript.meta.requires) {
+        userScript.meta.requires.map((src => functionCallAsString(async (src: string) => {
+            const code = await fetch(src).then((res) => res.text());
+            new Function(code)();
+        }, src))).forEach(codeToInject.push);
+    }
+
+    codeToInject.push(userScript.code);
+
     return {
         id,
-        matches: userScript.meta.match,
-        runAt: userScript.meta['run-at']?.replace('-', '_') as RunAt ?? 'document_idle',
-        world: "USER_SCRIPT", // "MAIN" | "USER_SCRIPT",
-        js: [
-            {
-                code: functionCallAsString(
-                    (userScriptId: string) => chrome.runtime.sendMessage({
-                        event: 'USER_SCRIPT_INJECTED', userScriptId,
-                    }),
-                    id,
-                )
-            },
-            {
-                code: userScript.code,
-            },
-        ],
+        matches: userScript.meta.matches,
+        excludeMatches: userScript.meta.excludeMatches,
+        allFrames: !userScript.meta.noFrames,
+        runAt,
+        world,
+        js: codeToInject.map((code) => ({code})),
     };
 }
 
@@ -283,9 +314,8 @@ function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<t
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
 }
 
-
 export function parse(userScriptRaw: string): UserScript {
-    const userScriptRegexp = /\B\/\/ ==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/ ==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
+    const userScriptRegexp = /\B\/\/\s*==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/\s*==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
     const userScriptMatch = userScriptRaw?.match(userScriptRegexp)
     if (!userScriptMatch?.groups) {
         throw new Error('Invalid userscript format:\n' + userScriptRaw);
@@ -293,16 +323,18 @@ export function parse(userScriptRaw: string): UserScript {
     const {metaContent, code} = userScriptMatch.groups;
 
     const metaTags = {} as Record<string, string[]>;
-    metaContent.split('\n').forEach(function (line) {
-        const lineMatch = line.match(/@(?<key>[\w-]+)\s+(?<value>.+)/);
-        if (!lineMatch?.groups) {
-            throw new Error('Invalid userscript meta tag: ' + line);
-        }
+    metaContent.split('\n')
+        .filter((line) => line.trim().startsWith('//'))
+        .forEach((line) => {
+            const lineMatch = line.trim().match(/@(?<key>[\w-]+)\s+(?<value>.+)/);
+            if (!lineMatch?.groups) {
+                throw new Error('Invalid userscript meta tag: ' + line);
+            }
 
-        const {key, value} = lineMatch.groups;
-        metaTags[key] ??= [];
-        metaTags[key].push(value);
-    });
+            const {key, value} = lineMatch.groups;
+            metaTags[key] ??= [];
+            metaTags[key].push(value);
+        });
 
     if (metaTags.name?.length !== 1) {
         throw new Error('User script must have exactly one @name field.');
@@ -322,13 +354,16 @@ export function parse(userScriptRaw: string): UserScript {
             icon: metaTags.icon?.[0],
             description: metaTags.description?.[0],
             author: metaTags.author?.[0],
-            'run-at': metaTags['run-at']?.[0],
-            match: metaTags.match,
+            runAt: metaTags['run-at']?.[0],
+            matches: metaTags.match,
+            excludeMatches: metaTags['exclude-match'],
+            requires: metaTags.require,
+            noFrames: metaTags['no-frames'] ? metaTags['no-frames']?.length >= 0 : undefined,
+            world: metaTags.world?.[0],
         },
         code,
     };
 }
-
 
 type SyncStorageEntry = {
     origin: string,
@@ -341,7 +376,7 @@ export function determineIcon(userScriptMeta: UserScriptMeta): string | undefine
         return userScriptMeta.icon;
     }
 
-    const match = userScriptMeta.match?.[0];
+    const match = userScriptMeta.matches?.[0];
     if (match) {
         try {
             const matchHost = new URL(match).host;
@@ -393,7 +428,6 @@ function isLocalSyncStorageChange(change: StorageChange) {
  *    remove from local storage
  *    unregister user script
  */
-
 
 async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
     fileId?: string,

@@ -20,6 +20,8 @@ const editorOptions = {
 
 const userScripts = ref<(ChromeUserScriptMetaLocal)[]>();
 const editorUserScript = ref<Optional<ChromeUserScript, 'id'>>();
+const saveState = ref<'saving' | 'success' | 'error' | undefined>();
+const saveError = ref<string | undefined>();
 
 onBeforeMount(async () => {
   const queryParams = new URL(location.href).searchParams;
@@ -60,6 +62,7 @@ async function editUserScript(id: string) {
 }
 
 function createUserScript() {
+  saveState.value = undefined;
   editorUserScript.value = {
     enabled: true,
     code: userScriptTemplate,
@@ -77,8 +80,16 @@ function closeUserScript() {
 }
 
 async function saveUserScript(userScript: Partial<ChromeUserScript>) {
-  userScript = await UserScripts.set(userScript);
+  try {
+    saveError.value = undefined;
+    saveState.value = 'saving';
+    userScript = await UserScripts.set(userScript)
+  } catch (err) {
+    saveError.value = (err as Error).message;
+    return;
+  }
 
+  saveState.value = 'success';
   // TODO move somewhere else
   if (editorUserScript.value) {
     const url = new URL(location.href);
@@ -117,7 +128,15 @@ async function removeUserScript(id: string) {
       <cr-button :circle="true" :border="false" @click="closeUserScript()">
         <cr-icon name="arrow_back"/>
       </cr-button>
-      <cr-button @click="saveUserScript(editorUserScript)">Save</cr-button>
+      <div v-if="saveError" style="color: #ef5a5a; font-size: 13px;"><b>Error:</b> {{ saveError }}</div>
+      <cr-button @click="saveUserScript(editorUserScript)"><span>{{ editorUserScript.id ? 'Save' : 'Add'}}</span>
+        <cr-icon v-if="saveState" :name="saveState === 'success' ? 'check': saveState === 'saving' ? 'progress_activity' : ''" :style="{
+          marginLeft: '8px',
+          fontSize: '16px',
+          fontWeight: 'bold',
+          color: 'unset',
+        }"/>
+      </cr-button>
     </div>
     <CodeEditor
         id="editor"

@@ -15,6 +15,12 @@ onMounted(async () => {
   console.log("userScripts:", userScripts.value);
 });
 
+function editUserScript(id: string) {
+  const url = new URL(chrome.runtime.getURL("src/options/index.html"));
+  url.searchParams.set('id', id);
+  window.open(url.toString(), '_blank');
+}
+
 function openOptionsPage() {
   chrome.runtime.openOptionsPage()
 }
@@ -40,16 +46,18 @@ function saveUserScript(userScript: Partial<ChromeUserScript>) {
 
     <div id="user-scripts">
       <div class="user-script" v-for="userScript in userScripts" :key="userScript.id">
-        <img id="icon" alt="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript.meta) ?? '' "
-             @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
-        <div>{{ userScript.meta.name }}</div>
+        <div class="mainContainer" @click="editUserScript(userScript.id)">
+          <img class="icon" alt="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript.meta) ?? '' "
+               @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
+          <div>{{ userScript.meta.name }}</div>
+        </div>
         <cr-toggle v-model="userScript.enabled"
-                   @click="saveUserScript(userScript)" style="margin-left: auto;"/>
+                   @click.stop="saveUserScript(userScript)" />
       </div>
     </div>
 
     <footer @click="openOptionsPage()">
-      <cr-icon name="settings" style="color: #c7c7c7; font-size: 20px"/>
+      <cr-icon name="settings" style="color: #c7c7c7; font-size: 18px"/>
       <div>Manage User Scripts</div>
     </footer>
   </div>
@@ -63,7 +71,7 @@ function saveUserScript(userScript: Partial<ChromeUserScript>) {
 }
 
 header {
-  padding: 12px 16px 8px 20px;
+  padding: 16px 16px 8px 20px;
   font-size: 16px;
   font-weight: 500;
   display: flex;
@@ -92,12 +100,30 @@ header {
 .user-script {
   display: flex;
   align-items: center;
-  padding: 8px 24px;
   gap: 14px;
-  border-bottom: 1px solid #4c4c4c;
+  padding: 0 24px 0 18px;
+}
+.user-script > * {
+  padding: 8px 0;
 }
 
-.user-script > img {
+.user-script .mainContainer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-grow: 1;
+  cursor: pointer;
+}
+
+.user-script .mainContainer > :first-child {
+  margin: 0 0 0 6px;
+}
+
+.user-script .mainContainer:hover {
+  background: #38393b;
+}
+
+.user-script .icon {
   width: 20px;
   height: 20px;
 }
@@ -105,10 +131,11 @@ header {
 footer {
   display: flex;
   align-items: center;
-  padding: 14px 24px;
+  padding: 12px 24px;
   gap: 14px;
   border-top: 1px solid #4c4c4c;
   cursor: pointer;
+  margin-top: 8px;
 }
 
 footer:hover {
