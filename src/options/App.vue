@@ -46,10 +46,8 @@ onBeforeMount(async () => {
       return;
     }
     editorUserScript.value = userScript;
-
   } else {
     userScripts.value = await UserScripts.getAll();
-    console.log("userScripts:", userScripts.value);
   }
 });
 

@@ -2,17 +2,25 @@
 import CrIcon from "@/components/cr-icon.vue";
 import {onMounted, ref} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {ChromeUserScript, ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScript, ChromeUserScriptMetaLocal, getMatchingUserScriptIds} from "@/service_worker/user_scripts.ts";
 import CrToggle from "@/components/cr-toggle.vue";
 
-const userScripts = ref<ChromeUserScriptMetaLocal[]>([]);
+const userScripts = ref<(ChromeUserScriptMetaLocal & { matched: boolean })[]>([]);
 
 onMounted(async () => {
-  // TODO display tab scripts only
-  // const currentTabId = await chrome.tabs.query({active: true, currentWindow: true})
-  //     .then(tabs => tabs[0]?.id ?? null);
-  userScripts.value = await UserScripts.getAll();
-  console.log("userScripts:", userScripts.value);
+  const currentTabId = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  }).then(tabs => tabs[0]?.id ?? 0);
+
+  const matchingUserScriptIds = await getMatchingUserScriptIds(currentTabId);
+
+  const allUserScripts = await UserScripts.getAll();
+
+  userScripts.value = allUserScripts.map((script) => ({
+    ...script,
+    matched: matchingUserScriptIds.includes(script.id),
+  })).sort((a, b) => ((a.matched === b.matched) ? 0 : (a.matched ? -1 : 1)) || a.meta.name.localeCompare(b.meta.name));
 });
 
 function editUserScript(id: string) {
@@ -49,10 +57,10 @@ function saveUserScript(userScript: Partial<ChromeUserScript>) {
         <div class="mainContainer" @click="editUserScript(userScript.id)">
           <img class="icon" alt="icon" :src="userScript.meta.icon ?? UserScripts.determineIcon(userScript.meta) ?? '' "
                @error="(e) => {(e.target as HTMLImageElement).src = '../assets/globe128.png'}">
-          <div>{{ userScript.meta.name }}</div>
+          <div :style="{ color: userScript.matched ? 'inherit' : 'grey'}">{{ userScript.meta.name }}</div>
         </div>
         <cr-toggle v-model="userScript.enabled"
-                   @click.stop="saveUserScript(userScript)" />
+                   @click.stop="saveUserScript(userScript)"/>
       </div>
     </div>
 
@@ -103,6 +111,7 @@ header {
   gap: 14px;
   padding: 0 24px 0 18px;
 }
+
 .user-script > * {
   padding: 8px 0;
 }

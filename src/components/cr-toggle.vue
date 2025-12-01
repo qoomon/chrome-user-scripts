@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import {defineModel} from "vue";
-
 const checked = defineModel({type: Boolean, required: true});
 defineProps({
   label: {

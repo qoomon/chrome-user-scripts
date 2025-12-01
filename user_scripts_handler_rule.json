@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://example.com/?url=\\0"
+      }
+    },
+    "condition": {
+      "regexFilter": ".*\\.user\\.js$",
+      "resourceTypes": ["main_frame"]
+    }
+  }
+]

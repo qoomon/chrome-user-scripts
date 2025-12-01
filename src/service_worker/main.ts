@@ -1,50 +1,43 @@
 import * as UserScripts from "@/service_worker/user_scripts.ts";
 
-UserScripts.load(); // TODO
-chrome.runtime.onStartup.addListener(() => {
-    console.log('Service worker onStartup...');
-    UserScripts.load();
-})
+console.log('Service worker init');
 
-chrome.action.onClicked.addListener(() => {
-    chrome.runtime.openOptionsPage();
-})
+(async () => {
+    await UserScripts.init();
 
-// TODO listen on user script events
-//   chrome.action.setBadgeText({
-//             tabId,
-//             text: tabUserScriptIds.length.toString(),
+    // --- Update badge when user scripts are injected ---
+    chrome.runtime.onUserScriptMessage.addListener(async (message, sender) => {
+        const tabId = sender.tab?.id;
+        if (!tabId) return;
+
+        if (message.event === 'USER_SCRIPT_INJECTED') {
+            const matchingUserScriptIds = await UserScripts.getMatchingUserScriptIds(tabId);
+            await chrome.action.setBadgeText({
+                tabId,
+                text: matchingUserScriptIds.length.toString(),
+            });
+        }
+    });
+
+//     // --- Handle *.user.js files with this extension ---
+//     chrome.webRequest.onBeforeRequest.addListener(
+//         ({method, tabId, url}) => {
+//             if (method === 'GET') {
+//                 const createScriptUrl = `chrome-extension://${chrome.runtime.id}/src/options/index.html`
+//                     + `?url=${encodeURIComponent(url)}`;
+//                 chrome.tabs.update(tabId, {url: createScriptUrl});
+//                 return {redirectUrl: createScriptUrl};
+//             }
+//         },
+//         {
+//             types: ['main_frame'],
+//             urls: [
+//                 '*://*/*.user.js',
+//                 '*://*/*.user.js?*',
+//             ],
 //         });
+})();
 
-chrome.webRequest.onBeforeRequest.addListener(({method, tabId, url}) => {
-    if (method !== 'GET') return;
-
-    const createScriptUrl = `chrome-extension://${chrome.runtime.id}/src/options/index.html?url=${encodeURIComponent(url)}`;
-    chrome.tabs.update(tabId, {url: createScriptUrl});
-    return {redirectUrl: createScriptUrl};
-}, {
-    urls: [
-        // 1. *:// comprises only http  /https
-        // 2. the API ignores #hash part
-        '*://*/*.user.js',
-        '*://*/*.user.js?*',
-    ],
-    types: ['main_frame'],
-});
-
-
-// https://developer.chrome.com/docs/extensions/reference/api/userScripts?hl=de#type-RegisteredUserScript
-// await chrome.userScripts.update(
-//     Object.entries(userScripts)
-//         .filter(([id, userScript]) => !userScript.disable)
-//         .map(([id, userScript]) => ({
-//             // defaults
-//             world: 'MAIN',
-//             runAt: 'document_idle',
-//             ...userScript,
-//             id,
-//         })));
-//
 
 // TODO
 // self.addEventListener('fetch', (event) => {
@@ -98,4 +91,5 @@ chrome.webRequest.onBeforeRequest.addListener(({method, tabId, url}) => {
 //         }
 //     };
 // }
+
 

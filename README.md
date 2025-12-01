@@ -42,15 +42,26 @@ It provides an easy-to-use interface for installing, organizing, and executing c
 - [Vite Documentation](https://vitejs.dev/)
 - [CRXJS Documentation](https://crxjs.dev/vite-plugin)
 
-## TODO's
-- extension id: ihgmdcaijidjdmngpnbdkdefhocmkdhc
-- delete extension dta in google drive https://drive.google.com/drive/settings
+## Dev Links
+- extension id: **ihgmdcaijidjdmngpnbdkdefhocmkdhc**
+- Delete extension data in google drive 
+  - go to https://drive.google.com/drive/settings
+  - disconnect "Chrome User Scripts" app
 - https://console.cloud.google.com/auth/overview?project=chrome-user-scripts
+- https://chrome.google.com/webstore/devconsole/ad94a22f-cce4-4924-9b70-818b360a08f9/ihgmdcaijidjdmngpnbdkdefhocmkdhc/edit
 
-logout
-```js
-await chrome.identity.removeCachedAuthToken({token: await chrome.identity.getAuthToken({
-        interactive: true,
-        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
-    }).then(res=>res.token)})
-```
+
+## ToDo's
+- handle offline situation
+- show toast on add/save success or error (bottom left corner see chrome extesion )
+- make identity permission an optional one. only request when user enables sync
+  https://developer.chrome.com/docs/extensions/reference/api/permissions#step-2-declare-optional-permissions-in-the-manifest
+  ```
+  chrome.permissions.request({permissions: ['identity']})
+  chrome.permissions.request({origins: ['<all_urls>']})
+  ```
+- logout
+    ```js
+    await fetch('https://accounts.google.com/o/oauth2/revoke?token=' + token);
+    await chrome.identity.removeCachedAuthToken({token: token});
+    ```

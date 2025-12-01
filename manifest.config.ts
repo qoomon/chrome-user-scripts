@@ -29,15 +29,29 @@ export default defineManifest({
     incognito: 'split',
     permissions: [
         'userScripts',
-        'activeTab',
         'storage',
         'unlimitedStorage',
         'identity',
-        'webRequest',
+        // 'webRequest',
+        'declarativeNetRequest'
     ],
     host_permissions: [
         "<all_urls>"
     ],
+    declarative_net_request: {
+        rule_resources: [{
+            id: "user_scripts_handler",
+            enabled: true,
+            path: "user_scripts_handler_rule.json"
+        }]
+    },
+    // optional_permissions: [
+    //     'identity',
+    //     'webRequest',
+    // ],
+    // optional_host_permissions: [
+    //     "<all_urls>",
+    // ],
     oauth2: {
         client_id: "289450459678-g29onfh4s94210jg5unp2ik4a13mt1pb.apps.googleusercontent.com",
         scopes: [
