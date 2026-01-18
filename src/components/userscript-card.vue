@@ -5,13 +5,13 @@ import CrToggle from "@/components/cr-toggle.vue";
 
 import {PropType} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScriptMeta} from "@/service_worker/user_scripts.ts";
 
 defineEmits(['edit', 'remove', 'state-change']);
 
 defineProps({
   userScript: {
-    type: Object as PropType<ChromeUserScriptMetaLocal>,
+    type: Object as PropType<ChromeUserScriptMeta>,
     required: true,
   },
 });
