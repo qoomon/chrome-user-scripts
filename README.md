@@ -65,3 +65,9 @@ It provides an easy-to-use interface for installing, organizing, and executing c
     await fetch('https://accounts.google.com/o/oauth2/revoke?token=' + token);
     await chrome.identity.removeCachedAuthToken({token: token});
     ```
+
+
+
+https://developer.chrome.com/docs/extensions/mv2/reference/declarativeNetRequest#filter-matching-charactgers
+
+https://github.com/violentmonkey/violentmonkey/blob/140b8c6c1d5023376aa33122ba4bd9ad58086fea/src/background/utils/tab-redirector.js#L53-L69

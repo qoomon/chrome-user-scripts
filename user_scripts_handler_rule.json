@@ -5,12 +5,24 @@
     "action": {
       "type": "redirect",
       "redirect": {
-        "regexSubstitution": "https://example.com/?url=\\0"
+        "regexSubstitution": "chrome-extension://ihgmdcaijidjdmngpnbdkdefhocmkdhc/src/options/index.html?url=\\0"
       }
     },
     "condition": {
       "regexFilter": ".*\\.user\\.js$",
-      "resourceTypes": ["main_frame"]
+      "resourceTypes": [
+        "main_frame"
+      ],
+      "responseHeaders": [
+        {
+          "header": "content-type",
+          "values": [
+            "text/plain; charset=utf-8",
+            "text/javascript; charset=utf-8"
+          ]
+        }
+      ]
     }
   }
 ]
+
