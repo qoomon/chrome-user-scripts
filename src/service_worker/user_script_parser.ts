@@ -79,7 +79,7 @@ export function parse(userScriptRaw: string): UserScript {
             matches: metaTags.match,
             excludeMatches: metaTags['exclude-match'],
             requires: metaTags.require,
-            noFrames: metaTags['no-frames'] ? metaTags['no-frames']?.length >= 0 : undefined,
+            noFrames: metaTags['no-frames'] ? metaTags['no-frames']?.length > 0 : undefined,
             world: metaTags.world?.[0],
         },
         code,

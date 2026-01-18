@@ -17,6 +17,7 @@ export async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
     });
 
     if (!fileId) {
+        // Create new file with multipart upload
         const form = new FormData();
         form.append('metadata', new Blob(
             [JSON.stringify({
@@ -29,10 +30,9 @@ export async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
         form.append('file', new Blob([fileContent], {type: 'text/plain'}));
 
         return await fetch(
-            'https://www.googleapis.com/upload/drive/v3/files' + (fileId ? `/${fileId}` : '')
-            + '?uploadType=multipart&fields=id',
+            'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
             {
-                method: !fileId ? 'POST' : 'PATCH',
+                method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${accessToken.token}`,
                 },
@@ -40,12 +40,13 @@ export async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
             })
             .then(async (res) => {
                 if (!res.ok) {
-                    throw new Error(`Failed to upload file ${fileId}: ${res.status} ${res.statusText}`
+                    throw new Error(`Failed to upload file: ${res.status} ${res.statusText}`
                         + await res.text());
                 }
                 return await res.json().then((res) => res.id);
             });
     } else {
+        // Update existing file with media upload
         await fetch(
             `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
             {
