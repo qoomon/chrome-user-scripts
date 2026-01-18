@@ -7,7 +7,7 @@ let installationId: string = '';
     console.debug('Extension initialized');
 
     installationId = await chrome.storage.local.get(extensionInstallIdStorageKey)
-        .then((data) => data?.[extensionInstallIdStorageKey]);
+        .then((data) => data?.[extensionInstallIdStorageKey] as string ?? '');
 
     if(!installationId) {
         installationId = crypto.randomUUID();
@@ -16,5 +16,5 @@ let installationId: string = '';
 })();
 
 export default {
-    installationId
+    installationId,
 } as const

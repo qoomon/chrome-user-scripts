@@ -2,10 +2,10 @@
 import CrIcon from "@/components/cr-icon.vue";
 import {onMounted, ref} from "vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {ChromeUserScript, ChromeUserScriptMetaLocal, getMatchingUserScriptIds} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScript, ChromeUserScriptMeta, getMatchingUserScriptIds} from "@/service_worker/user_scripts.ts";
 import CrToggle from "@/components/cr-toggle.vue";
 
-const userScripts = ref<(ChromeUserScriptMetaLocal & { matched: boolean })[]>([]);
+const userScripts = ref<(ChromeUserScriptMeta & { matched: boolean })[]>([]);
 
 onMounted(async () => {
   const currentTabId = await chrome.tabs.query({

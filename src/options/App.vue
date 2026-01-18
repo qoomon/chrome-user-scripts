@@ -5,10 +5,12 @@ import CrIcon from "@/components/cr-icon.vue";
 import CrButton from "@/components/cr-button.vue";
 import UserscriptCard from "@/components/userscript-card.vue";
 import * as UserScripts from "@/service_worker/user_scripts.ts";
-import {ChromeUserScript, ChromeUserScriptMetaLocal} from "@/service_worker/user_scripts.ts";
+import {ChromeUserScript, ChromeUserScriptMeta} from "@/service_worker/user_scripts.ts";
 import userScriptTemplate from './template.userscript.js?raw'
 import CrPage from "@/components/cr-page.vue";
 import {Optional} from "@/common.ts";
+
+import {driveStorage} from "@/service_worker/drive_storage.ts";
 
 const editorOptions = {
   fontSize: 14,
@@ -18,7 +20,7 @@ const editorOptions = {
   },
 };
 
-const userScripts = ref<(ChromeUserScriptMetaLocal)[]>();
+const userScripts = ref<(ChromeUserScriptMeta)[]>();
 const editorUserScript = ref<Optional<ChromeUserScript, 'id'>>();
 const saveState = ref<'saving' | 'success' | 'error' | undefined>();
 const saveError = ref<string | undefined>();

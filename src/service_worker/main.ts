@@ -5,18 +5,13 @@ console.log('Service worker init');
 (async () => {
     await UserScripts.init();
 
-    // --- Update badge when user scripts are injected ---
-    chrome.runtime.onUserScriptMessage.addListener(async (message, sender) => {
-        const tabId = sender.tab?.id;
-        if (!tabId) return;
-
-        if (message.event === 'USER_SCRIPT_INJECTED') {
-            const matchingUserScriptIds = await UserScripts.getMatchingUserScriptIds(tabId);
-            await chrome.action.setBadgeText({
-                tabId,
-                text: matchingUserScriptIds.length.toString(),
-            });
-        }
+    UserScripts.onInjection.addListener(async (tabId) => {
+        console.log(`Service worker: onInjection for tab ${tabId}`);
+        const matchingUserScriptIds = await UserScripts.getMatchingUserScriptIds(tabId);
+        await chrome.action.setBadgeText({
+            tabId,
+            text: matchingUserScriptIds.length.toString(),
+        });
     });
 
 //     // --- Handle *.user.js files with this extension ---
