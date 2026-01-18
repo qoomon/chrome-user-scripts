@@ -18,7 +18,21 @@ export function _throw(error: Error | string): never {
     throw error;
 }
 
-export function determineIcon(matches?: string[]): string | undefined {
+export function determineIcon(iconOrMeta: string | { icon?: string; matches?: string[] } | undefined, matches?: string[]): string | undefined {
+    // Handle direct icon string
+    if (typeof iconOrMeta === 'string') {
+        return iconOrMeta;
+    }
+    
+    // Handle object with icon and matches
+    if (iconOrMeta && typeof iconOrMeta === 'object') {
+        if (iconOrMeta.icon) {
+            return iconOrMeta.icon;
+        }
+        matches = iconOrMeta.matches;
+    }
+    
+    // Fallback to favicon from matches
     const match = matches?.[0];
     if (match) {
         try {

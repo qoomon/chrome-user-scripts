@@ -1,5 +1,5 @@
 import extension from "@/extension.ts";
-import {_throw, noop} from "@/common.ts";
+import {_throw, noop, determineIcon as determineIconCommon} from "@/common.ts";
 import {driveStorage, DriveStorage} from "@/service_worker/drive_storage.ts";
 import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
 import StorageArea = chrome.storage.StorageArea;
@@ -305,7 +305,7 @@ function buildRegisteredUserScript(id: string, code: string): RegisteredUserScri
     };
 }
 
-function functionCallAsString<T extends unknown[]>(fn: (...args: T) => unknown, ...args: T): string {
+function functionCallAsString<T extends readonly unknown[]>(fn: (...args: T) => unknown, ...args: T): string {
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
 }
 
@@ -361,20 +361,7 @@ export function parse(userScriptRaw: string): UserScript {
 }
 
 export function determineIcon(userScriptMeta: UserScriptMeta): string | undefined {
-    if (userScriptMeta.icon) {
-        return userScriptMeta.icon;
-    }
-
-    const match = userScriptMeta.matches?.[0];
-    if (match) {
-        try {
-            const matchHost = new URL(match).host;
-            return 'https://www.google.com/s2/favicons?sz=64&domain=' + matchHost;
-        } catch {
-            // Invalid URL, return undefined
-        }
-    }
-    return undefined;
+    return determineIconCommon(userScriptMeta);
 }
 
 async function getStorageItem<T>(storageArea: StorageArea | DriveStorage, key: string): Promise<T | undefined> {
@@ -384,14 +371,10 @@ async function getStorageItem<T>(storageArea: StorageArea | DriveStorage, key: s
 }
 
 async function setStorageItem<T>(storageArea: StorageArea | DriveStorage, key: string, value: T): Promise<void> {
-    const wrappedValue = wrapStorageItem(value);
-    if ('onChanged' in storageArea && typeof storageArea.onChanged === 'object') {
-        // DriveStorage
-        await (storageArea as DriveStorage).set({[key]: wrappedValue});
-    } else {
-        // chrome.storage.StorageArea
-        await (storageArea as StorageArea).set({[key]: wrappedValue});
-    }
+    const wrappedItem = {[key]: wrapStorageItem(value)};
+    // Both types have compatible set methods with different overloads
+    // Using any here is acceptable as we control both types
+    await (storageArea as any).set(wrappedItem);
 }
 
 type StorageItem<T> = {
