@@ -1,17 +1,22 @@
 import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
-import StorageChange = chrome.storage.StorageChange;
-import StorageArea = chrome.storage.StorageArea;
 import RunAt = chrome.extensionTypes.RunAt;
-import ExtensionInfo from "@/extension.ts";
 import {noop} from "@/common.ts";
+import {
+    calculateHash,
+    getStorageItem,
+    isLocalSyncStorageChange,
+    setStorageItem,
+    unwrapSyncStorageEntry,
+    userScriptStorageKey,
+    userScriptStorageMetaKey,
+    userScriptMetaStorageKeyPrefix,
+} from "@/service_worker/storage_helpers.ts";
+import {downloadFromGoogleDrive, uploadToGoogleDrive, deleteFromGoogleDrive} from "@/service_worker/drive_storage.ts";
+import {parse, type UserScriptMeta} from "@/service_worker/user_script_parser.ts";
 
-const storageNamespaceSeparator = '::';
-const userScriptStorageNamespace = 'userscripts';
-const userScriptMetaStorageNamespace = 'userscripts-meta';
-let userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
-let userScriptMetaStorageKeyPrefix = userScriptMetaStorageNamespace + storageNamespaceSeparator;
-const userScriptStorageKey = (scriptId: string) => userScriptStorageKeyPrefix + scriptId;
-const userScriptStorageMetaKey = (scriptId: string) => userScriptMetaStorageKeyPrefix + scriptId;
+// Re-export types and functions from parser module for backward compatibility
+export type {UserScript, UserScriptMeta} from "@/service_worker/user_script_parser.ts";
+export {parse, determineIcon} from "@/service_worker/user_script_parser.ts";
 
 export type ChromeUserScript = {
     id: string;
@@ -32,26 +37,6 @@ type ChromeUserScriptMetaSync = {
     hash: string,
     enabled: boolean,
     fileId: string,
-}
-
-export type UserScript = {
-    meta: UserScriptMeta;
-    code: string;
-}
-
-export type UserScriptMeta = {
-    name: string;
-    namespace?: string;
-    version?: string;
-    icon?: string;
-    description?: string;
-    author?: string;
-    runAt?: string;
-    matches?: string[];
-    excludeMatches?: string[];
-    requires?: string[];
-    noFrames?: boolean;
-    world?: string;
 }
 
 const tabsMatchingUserScripts = new Map<number, string[]>();
@@ -343,252 +328,6 @@ function buildRegisteredUserScript(id: string, code: string): RegisteredUserScri
 
 function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<typeof fn>) {
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
-}
-
-export function parse(userScriptRaw: string): UserScript {
-    const userScriptRegexp = /\B\/\/\s*==UserScript==\r?\n(?<metaContent>[\S\s]*?)\r?\n\/\/\s*==\/UserScript==(\S*\r?\n)*(?<code>[\S\s]*)/
-    const userScriptMatch = userScriptRaw?.match(userScriptRegexp)
-    if (!userScriptMatch?.groups) {
-        throw new Error('Invalid userscript format:\n' + userScriptRaw);
-    }
-    const {metaContent, code} = userScriptMatch.groups;
-
-    const metaTags = {} as Record<string, string[]>;
-    metaContent.split('\n')
-        .filter((line) => line.trim().startsWith('//'))
-        .forEach((line) => {
-            const lineMatch = line.trim().match(/@(?<key>[\w-]+)\s+(?<value>.+)/);
-            if (!lineMatch?.groups) {
-                throw new Error('Invalid userscript meta tag: ' + line);
-            }
-
-            const {key, value} = lineMatch.groups;
-            metaTags[key] ??= [];
-            metaTags[key].push(value);
-        });
-
-    if (metaTags.name?.length !== 1) {
-        throw new Error('User script must have exactly one @name field.');
-    }
-
-    /**
-     * https://violentmonkey.github.io/api/metadata-block/
-     * https://wiki.greasespot.net/Metadata_Block
-     * https://www.tampermonkey.net/documentation.php
-     */
-
-    return {
-        meta: {
-            name: metaTags.name[0],
-            namespace: metaTags.namespace?.[0],
-            version: metaTags.version?.[0],
-            icon: metaTags.icon?.[0],
-            description: metaTags.description?.[0],
-            author: metaTags.author?.[0],
-            runAt: metaTags['run-at']?.[0],
-            matches: metaTags.match,
-            excludeMatches: metaTags['exclude-match'],
-            requires: metaTags.require,
-            noFrames: metaTags['no-frames'] ? metaTags['no-frames']?.length >= 0 : undefined,
-            world: metaTags.world?.[0],
-        },
-        code,
-    };
-}
-
-type SyncStorageEntry = {
-    origin: string,
-    payload: any,
-}
-
-// TODO move to frontend
-export function determineIcon(userScriptMeta: UserScriptMeta): string | undefined {
-    if (userScriptMeta.icon) {
-        return userScriptMeta.icon;
-    }
-
-    const match = userScriptMeta.matches?.[0];
-    if (match) {
-        try {
-            const matchHost = new URL(match).host;
-            return 'https://www.google.com/s2/favicons?sz=64&domain=' + matchHost;
-        } catch {
-            // ignore
-        }
-    }
-}
-
-// ----- Synced Storage ----------
-
-
-function wrapSyncStorageEntry(payload: any): SyncStorageEntry {
-    return {
-        origin: ExtensionInfo.installationId,
-        payload,
-    }
-}
-
-function unwrapSyncStorageEntry<T>(entry: SyncStorageEntry): T {
-    return entry.payload as T;
-}
-
-function isLocalSyncStorageChange(change: StorageChange) {
-    return (change.newValue as SyncStorageEntry)?.origin === ExtensionInfo.installationId
-        || (!change.newValue && (change.oldValue as SyncStorageEntry)?.origin === ExtensionInfo.installationId);
-}
-
-/**
- * --- ON STARTUP
- * load all userscripts from sync storage
- *  for each userscript
- *   check if local storage code is up to date
- *    if not
- *      get code from google drive
- *      store to local storage (id, code)
- *   register user script
- *   remove local storage entries (uploaded=true) not in sync storage
- *   upload local storage entries (uploaded=false) to google drive
- *    store to sync storage (id, enabled, google drive file id)
- *
- * register storage sync change listener
- *  if newValue
- *   get code from google drive
- *   store to local storage (id, enabled, code)
- *   register user script
- *  else
- *    remove from local storage
- *    unregister user script
- */
-
-async function uploadToGoogleDrive({fileId, fileName, fileContent}: {
-    fileId?: string,
-    fileName?: string;
-    fileContent: string,
-}) {
-    // TODO handle disconnected(removed from account) oauth app
-    const accessToken = await chrome.identity.getAuthToken({
-        interactive: true,
-        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
-    });
-
-    if (!fileId) {
-        const form = new FormData();
-        form.append('metadata', new Blob(
-            [JSON.stringify({
-                name: fileName,
-                mimeType: 'text/plain',
-                parents: ['appDataFolder'],
-            })],
-            {type: 'application/json'},
-        ));
-        form.append('file', new Blob([fileContent], {type: 'text/plain'}));
-
-        return await fetch(
-            'https://www.googleapis.com/upload/drive/v3/files' + (fileId ? `/${fileId}` : '')
-            + '?uploadType=multipart&fields=id',
-            {
-                method: !fileId ? 'POST' : 'PATCH',
-                headers: {
-                    'Authorization': `Bearer ${accessToken.token}`,
-                },
-                body: form,
-            })
-            .then(async (res) => {
-                if (!res.ok) {
-                    throw new Error(`Failed to upload file ${fileId}: ${res.status} ${res.statusText}`
-                        + await res.text());
-                }
-                return await res.json().then((res) => res.id);
-            });
-    } else {
-        await fetch(
-            `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-            {
-                method: 'PATCH',
-                headers: {
-                    'Authorization': `Bearer ${accessToken.token}`,
-                    'Content-Type': 'text/plain',
-                    'Content-Length': fileContent.length.toString(),
-                },
-                body: new Blob([fileContent], {type: 'text/plain'}),
-            }
-        );
-        return fileId;
-    }
-
-
-}
-
-async function downloadFromGoogleDrive(fileId: string) {
-    const accessToken = await chrome.identity.getAuthToken({
-        interactive: true,
-        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
-    });
-    return await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${accessToken.token}`,
-            },
-        })
-        .then(async (res) => {
-            if (!res.ok) {
-                throw new Error(`Failed to download file ${fileId}: ${res.status} ${res.statusText}\n`
-                    + await res.text());
-            }
-            return await res.text();
-        });
-}
-
-async function deleteFromGoogleDrive(fileId: string) {
-    const accessToken = await chrome.identity.getAuthToken({
-        interactive: true,
-        scopes: ['https://www.googleapis.com/auth/drive.appdata'],
-    });
-    return await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}`,
-        {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${accessToken.token}`,
-            },
-        })
-        .then(async (res) => {
-            if (!res.ok) {
-                throw new Error(`Failed to delete file ${fileId}: ${res.status} ${res.statusText}\n`
-                    + await res.text());
-            }
-        });
-}
-
-async function calculateHash(content: string): Promise<string> {
-    if (content === undefined) {
-        throw new Error('Content is undefined');
-    }
-    return await crypto.subtle.digest('SHA-256',
-        new TextEncoder().encode(content))
-        .then((buffer => new Uint8Array(buffer).toBase64({urlSafe: false, omitPadding: false})))
-}
-
-async function getStorageItem<T>(storage: StorageArea, key: string): Promise<T | undefined> {
-    return storage.get(key)
-        .then((data) => data?.[key])
-        .then((value) => {
-            if (storage === chrome.storage.sync && value) {
-                return unwrapSyncStorageEntry<T>(value);
-            }
-            return value as T | undefined;
-        })
-}
-
-async function setStorageItem<T>(storage: StorageArea, key: string, value: T): Promise<void> {
-    if (storage === chrome.storage.sync) {
-        value = wrapSyncStorageEntry(value) as unknown as T;
-        console.log('Saving to sync storage key:', key, 'value:', value);
-    }
-
-    return storage.set({[key]: value});
 }
 
 async function userScriptsGetScript(id: string) {
