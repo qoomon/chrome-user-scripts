@@ -21,7 +21,7 @@ type DriveSyncMetadata = {
 interface DriveQueueItem {
     action: 'SET' | 'REMOVE';
     key: string;
-    value?: any;
+    value?: unknown;
     timestamp: number;
 }
 
@@ -64,7 +64,7 @@ const drive = {
         return data.files && data.files.length > 0 ? data.files[0].id : null;
     },
 
-    async upload(fileName: string, data: any) {
+    async upload(fileName: string, data: unknown) {
         const token = await this.getAuthToken();
 
         const fileContent = new Blob([JSON.stringify(data)], {type: 'application/json'});
@@ -110,7 +110,7 @@ const drive = {
         return fileId;
     },
 
-    async download(fileName: string): Promise<any> {
+    async download(fileName: string): Promise<unknown> {
         const token = await this.getAuthToken();
 
         let fileId = await this.getFileId(fileName, token);
@@ -151,8 +151,6 @@ export class DriveStorage {
         // Attempt to clear any pending queue on startup
         // noinspection JSIgnoredPromiseFromCall
         this.processSyncQueue();
-
-        // TODO clear tombstoned items from local storage periodically
     }
 
     private setupListeners() {
@@ -169,7 +167,7 @@ export class DriveStorage {
      * Sets items to local cache and queues them for Drive sync.
      * Works offline.
      */
-    async set<T = { [key: string]: any }>(items: Partial<T>): Promise<void> {
+    async set<T extends Record<string, unknown> = Record<string, unknown>>(items: Partial<T>): Promise<void> {
         const timestamp = Date.now();
 
         const wrappedItems = mapObject(items, ([key, value]) => [
@@ -204,7 +202,7 @@ export class DriveStorage {
         const wrappedItems = await chrome.storage.local.get<Record<string, LocalItemEnvelope<T>>>(wrappedKeys);
         return mapObject(wrappedItems, ([key, value]) => [
             key.substring(DRIVE_STORAGE_LOCAL_ITEM_PREFIX.length),
-            value.data,
+            (value as LocalItemEnvelope<T>).data,
         ]);
     }
 
@@ -295,9 +293,7 @@ export class DriveStorage {
 
             switch (item.action) {
                 case 'SET':
-                    console.debug('SYNC:', 'Uploading item to Drive', item);
                     await drive.upload(item.key, item.value);
-                    console.debug('SYNC:', 'Uploading item to Drive successful!', item.key);
                     await chrome.storage.sync.set<Record<string, DriveSyncMetadata>>({
                         [`${DRIVE_STORAGE_SYNC_META_PREFIX}${item.key}`]: {
                             key: item.key,
@@ -306,9 +302,7 @@ export class DriveStorage {
                     });
                     break;
                 case 'REMOVE':
-                    console.debug('SYNC:', 'Removing item from Drive', item.key);
                     await drive.delete(item.key);
-                    console.debug('SYNC:', 'Removing item from Drive successful!', item.key);
                     await chrome.storage.sync.set<Record<string, DriveSyncMetadata>>({
                         [`${DRIVE_STORAGE_SYNC_META_PREFIX}${item.key}`]: {
                             key: item.key,
@@ -348,14 +342,11 @@ export class DriveStorage {
                     if (!localItem || newMetadata.timestamp > localItem.timestamp) {
                         if (newMetadata.deleted) {
                             if (localItem) {
-                                console.debug('SYNC:', 'Remove local item', newMetadata.key);
                                 await chrome.storage.local.remove(localKey);
                             }
                         } else {
-                            console.debug('SYNC:', 'Fetch item from Drive', newMetadata.key);
                             const token = await drive.getAuthToken();
                             if (!token) {
-                                // TODO: Handle missing token scenario if needed
                                 console.error('SYNC:', 'Missing auth token for Drive download');
                             } else {
                                 const content = await drive.download(newMetadata.key);

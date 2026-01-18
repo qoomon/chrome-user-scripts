@@ -4,7 +4,6 @@ let installationId: string = '';
 
 (async () => {
     if(installationId) return;
-    console.debug('Extension initialized');
 
     installationId = await chrome.storage.local.get(extensionInstallIdStorageKey)
         .then((data) => data?.[extensionInstallIdStorageKey] as string ?? '');

@@ -37,11 +37,11 @@ function closePopup() {
   window.close();
 }
 
-function saveUserScript(userScript: Partial<ChromeUserScript>) {
+async function saveUserScript(userScript: Partial<ChromeUserScript>) {
   if (!userScript) {
     throw new Error("No user script to save");
   }
-  UserScripts.set(userScript);
+  await UserScripts.set(userScript);
 }
 </script>
 

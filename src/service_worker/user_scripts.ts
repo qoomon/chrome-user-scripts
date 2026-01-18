@@ -5,13 +5,17 @@ import RegisteredUserScript = chrome.userScripts.RegisteredUserScript;
 import StorageArea = chrome.storage.StorageArea;
 import RunAt = chrome.extensionTypes.RunAt;
 
-const storageNamespaceSeparator = ':';
-const userScriptStorageNamespace = 'userscripts';
-const userScriptMetaStorageNamespace = 'userscripts-meta';
-let userScriptStorageKeyPrefix = userScriptStorageNamespace + storageNamespaceSeparator;
-let userScriptMetaStorageKeyPrefix = userScriptMetaStorageNamespace + storageNamespaceSeparator;
-const userScriptStorageKey = (scriptId: string) => userScriptStorageKeyPrefix + scriptId;
-const userScriptStorageMetaKey = (scriptId: string) => userScriptMetaStorageKeyPrefix + scriptId;
+// Storage key constants
+const STORAGE_NAMESPACE_SEPARATOR = ':';
+const USER_SCRIPT_STORAGE_NAMESPACE = 'userscripts';
+const USER_SCRIPT_META_STORAGE_NAMESPACE = 'userscripts-meta';
+const USER_SCRIPT_STORAGE_KEY_PREFIX = USER_SCRIPT_STORAGE_NAMESPACE + STORAGE_NAMESPACE_SEPARATOR;
+const USER_SCRIPT_META_STORAGE_KEY_PREFIX = USER_SCRIPT_META_STORAGE_NAMESPACE + STORAGE_NAMESPACE_SEPARATOR;
+const SESSION_STORAGE_TAB_KEY_PREFIX = 'tab:';
+
+const userScriptStorageKey = (scriptId: string) => USER_SCRIPT_STORAGE_KEY_PREFIX + scriptId;
+const userScriptStorageMetaKey = (scriptId: string) => USER_SCRIPT_META_STORAGE_KEY_PREFIX + scriptId;
+const sessionStorageTabKey = (tabId: number) => `${SESSION_STORAGE_TAB_KEY_PREFIX}${tabId}:userScripts`;
 
 export type ChromeUserScript = {
     id: string;
@@ -72,12 +76,10 @@ export async function init() {
         await chrome.userScripts.unregister();
         for (const meta of await getAll()) {
             if (meta.enabled) {
-                console.log('loading user script:', meta.id);
                 const code = await getStorageItem<string>(
                     driveStorage, userScriptStorageKey(meta.id));
                 if (code) {
                     const registeredUserScript = buildRegisteredUserScript(meta.id, code);
-                    console.log('registering user script:', meta.id);
                     await chrome.userScripts.register([registeredUserScript]);
                 }
             }
@@ -118,7 +120,7 @@ export async function init() {
                     continue;
                 }
 
-                if (key.startsWith(userScriptMetaStorageKeyPrefix)) {
+                if (key.startsWith(USER_SCRIPT_META_STORAGE_KEY_PREFIX)) {
                     if (change.newValue) {
                         const newValue = change.newValue as StorageItem<ChromeUserScriptMeta>;
                         await set(newValue.value, 'STORAGE_CHANGE');
@@ -126,9 +128,9 @@ export async function init() {
                         const oldUserScriptMeta = change.oldValue as ChromeUserScriptMeta;
                         await remove(oldUserScriptMeta.id, 'STORAGE_CHANGE')
                     }
-                } else if (key.startsWith(userScriptStorageKeyPrefix)) {
+                } else if (key.startsWith(USER_SCRIPT_STORAGE_KEY_PREFIX)) {
                     if (change.newValue) {
-                        const id = key.substring(userScriptStorageKeyPrefix.length);
+                        const id = key.substring(USER_SCRIPT_STORAGE_KEY_PREFIX.length);
                         const newValue = change.newValue as StorageItem<string>;
                         await set({
                             id,
@@ -158,7 +160,6 @@ export async function set(userScript: Partial<ChromeUserScript>, ref?: 'STORAGE_
         } : (await getStorageItem<ChromeUserScriptMeta>(driveStorage, userScriptStorageMetaKey(userScript.id!))
             ?? _throw(new Error('User script meta not found for id: ' + userScript.id)));
 
-    // TODO refactor
     const userScriptCodeChanged = isNewUserScript || (userScriptHash !== null && userScriptHash !== chromeUserScriptMeta.hash);
 
     if (!userScript.id) {
@@ -194,16 +195,13 @@ export async function set(userScript: Partial<ChromeUserScript>, ref?: 'STORAGE_
 
             const registeredUserScript = buildRegisteredUserScript(chromeUserScriptMeta.id, code);
             if (userScriptIsRegistered) {
-                console.log('updating user script:', chromeUserScriptMeta.id);
                 await chrome.userScripts.update([registeredUserScript]);
             } else {
-                console.log('registering user script:', chromeUserScriptMeta.id);
                 await chrome.userScripts.register([registeredUserScript]);
             }
         }
     } else {
         if (userScriptIsRegistered) {
-            console.log('unregistering user script:', chromeUserScriptMeta.id);
             await chrome.userScripts.unregister({ids: [chromeUserScriptMeta.id]});
         }
     }
@@ -225,30 +223,28 @@ export async function get(id: string): Promise<ChromeUserScriptMeta & ChromeUser
 export async function getAll(): Promise<ChromeUserScriptMeta[]> {
     return await driveStorage.get<StorageItem<ChromeUserScriptMeta>>().then((entries) => {
         return Object.entries(entries)
-            .filter(([key]) => key.startsWith(userScriptMetaStorageKeyPrefix))
+            .filter(([key]) => key.startsWith(USER_SCRIPT_META_STORAGE_KEY_PREFIX))
             .map(([_, value]) => value.value)
             .sort((a, b) => a.meta.name.localeCompare(b.meta.name));
     });
 }
 
 async function addMatchingUserScripts(tabId: number, userScriptId: string) {
-    console.debug('Add matching user scripts.', 'tabId:', tabId, 'scriptId:', userScriptId);
     const matchingUserScripts = tabsMatchingUserScripts.get(tabId) || [];
     tabsMatchingUserScripts.set(tabId, matchingUserScripts);
     matchingUserScripts.push(userScriptId);
     await setStorageItem(chrome.storage.session,
-        `tab:${tabId}:userScripts`, matchingUserScripts);
+        sessionStorageTabKey(tabId), matchingUserScripts);
 }
 
 async function clearMatchingUserScripts(tabId: number) {
-    console.debug('Clearing matching user scripts.', 'tabId:', tabId);
     tabsMatchingUserScripts.delete(tabId);
-    await chrome.storage.session.remove(`tab::${tabId}::userScripts`).catch(noop);
+    await chrome.storage.session.remove(sessionStorageTabKey(tabId)).catch(noop);
 }
 
 export async function getMatchingUserScriptIds(tabId: number): Promise<string[]> {
     return await getStorageItem<string[]>(chrome.storage.session,
-        `tab:${tabId}:userScripts`) ?? [];
+        sessionStorageTabKey(tabId)) ?? [];
 }
 
 
@@ -257,7 +253,6 @@ export async function remove(id: string, ref?: 'STORAGE_CHANGE'): Promise<void> 
         await driveStorage.remove(userScriptStorageMetaKey(id));
         await driveStorage.remove(userScriptStorageKey(id));
     }
-    console.log('unregistering user script:', id);
     const userScriptIsRegistered = await userScriptsHasScript(id);
     if (userScriptIsRegistered) {
         await chrome.userScripts.unregister({ids: [id]});
@@ -310,7 +305,7 @@ function buildRegisteredUserScript(id: string, code: string): RegisteredUserScri
     };
 }
 
-function functionCallAsString(fn: (...args: any[]) => any, ...args: Parameters<typeof fn>) {
+function functionCallAsString<T extends unknown[]>(fn: (...args: T) => unknown, ...args: T): string {
     return `(${fn})(${args.map(arg => JSON.stringify(arg)).join(',')});`;
 }
 
@@ -365,7 +360,6 @@ export function parse(userScriptRaw: string): UserScript {
     };
 }
 
-// TODO move to frontend
 export function determineIcon(userScriptMeta: UserScriptMeta): string | undefined {
     if (userScriptMeta.icon) {
         return userScriptMeta.icon;
@@ -377,9 +371,10 @@ export function determineIcon(userScriptMeta: UserScriptMeta): string | undefine
             const matchHost = new URL(match).host;
             return 'https://www.google.com/s2/favicons?sz=64&domain=' + matchHost;
         } catch {
-            // ignore
+            // Invalid URL, return undefined
         }
     }
+    return undefined;
 }
 
 async function getStorageItem<T>(storageArea: StorageArea | DriveStorage, key: string): Promise<T | undefined> {
@@ -388,10 +383,15 @@ async function getStorageItem<T>(storageArea: StorageArea | DriveStorage, key: s
     });
 }
 
-async function setStorageItem<T = any>(storageArea: StorageArea | DriveStorage, key: string, value: T): Promise<void> {
-    return storageArea.set({
-        [key]: wrapStorageItem(value),
-    });
+async function setStorageItem<T>(storageArea: StorageArea | DriveStorage, key: string, value: T): Promise<void> {
+    const wrappedValue = wrapStorageItem(value);
+    if ('onChanged' in storageArea && typeof storageArea.onChanged === 'object') {
+        // DriveStorage
+        await (storageArea as DriveStorage).set({[key]: wrappedValue});
+    } else {
+        // chrome.storage.StorageArea
+        await (storageArea as StorageArea).set({[key]: wrappedValue});
+    }
 }
 
 type StorageItem<T> = {
@@ -405,29 +405,6 @@ function wrapStorageItem<T>(value: T): StorageItem<T> {
         value,
     };
 }
-
-/**
- * --- ON STARTUP
- * load all userscripts from sync storage
- *  for each userscript
- *   check if local storage code is up to date
- *    if not
- *      get code from google drive
- *      store to local storage (id, code)
- *   register user script
- *   remove local storage entries (uploaded=true) not in sync storage
- *   upload local storage entries (uploaded=false) to google drive
- *    store to sync storage (id, enabled, google drive file id)
- *
- * register storage sync change listener
- *  if newValue
- *   get code from google drive
- *   store to local storage (id, enabled, code)
- *   register user script
- *  else
- *    remove from local storage
- *    unregister user script
- */
 
 async function calculateHash(content: string): Promise<string> {
     if (content === undefined) {

@@ -26,7 +26,6 @@ const saveError = ref<string | undefined>();
 onBeforeMount(async () => {
   const queryParams = new URL(location.href).searchParams;
   if (queryParams.get('url')) {
-    // TODO
     const scriptUrl = queryParams.get('url')!;
     const code = await fetch(scriptUrl).then((res) => res.text());
     editorUserScript.value = {
@@ -40,9 +39,7 @@ onBeforeMount(async () => {
   } else if (queryParams.get('id')) {
     const scriptId = queryParams.get('id')!;
     const userScript = await UserScripts.get(scriptId);
-    console.log("userScript:", userScript);
     if (!userScript) {
-      // TODO
       return;
     }
     editorUserScript.value = userScript;
@@ -88,7 +85,6 @@ async function saveUserScript(userScript: Partial<ChromeUserScript>) {
   }
 
   saveState.value = 'success';
-  // TODO move somewhere else
   if (editorUserScript.value) {
     const url = new URL(location.href);
     url.searchParams.set('id', userScript.id!);
